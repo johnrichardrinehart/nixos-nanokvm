@@ -18,8 +18,18 @@ let
   bootScript = import ../lib/boot-script.nix { inherit lib; } {
     inherit (ab) maxTries maxUnconfirmedBoots;
     inherit (layout) env;
+    inherit armWatchdog;
     fallback = recovery;
   };
+
+  # The SG2002's DesignWare watchdog (WDT0), armed by register writes:
+  # U-Boot's DESIGNWARE_WATCHDOG driver hangs U-Boot during startup on
+  # this board. TORR 0xff selects the largest timeout, 2^31 cycles of the
+  # 25 MHz clock (~86 s); CRR 0x76 restarts the count. Once enabled it
+  # cannot be stopped, so the script arms it only before loading a slot.
+  # Linux's dw_wdt driver finds it running and feeds it until userspace
+  # opens it (watchdog.open_timeout).
+  armWatchdog = "mw.l 0x03010004 0xff; mw.l 0x0301000c 0x76; mw.l 0x03010000 1";
 
   # USB fastboot on the HID USB-C port: whole card as `mmc0`, slots as
   # `slota`/`slotb` (lib/layout.nix).
@@ -32,6 +42,8 @@ let
     CONFIG_CMD_MMC=y
     CONFIG_CMD_EXPORTENV=y
     CONFIG_CMD_IMPORTENV=y
+    # Watchdog: armed by the boot script, no U-Boot driver (see above).
+    CONFIG_CMD_MEMORY=y
     # Let fastboot (recovery, see lib/boot-script.nix) write the card.
     CONFIG_FASTBOOT_FLASH=y
     CONFIG_FASTBOOT_FLASH_MMC=y
@@ -62,6 +74,10 @@ let
           if grep -Eq '^CONFIG_(ENV_REDUNDANT|ENV_IS_IN_[A-Z0-9_]+)=y' .config; then
             echo "nanokvm: U-Boot must not keep an environment of its own:" >&2
             grep -E '^CONFIG_(ENV_REDUNDANT|ENV_IS_IN_[A-Z0-9_]+)=y' .config >&2
+            exit 1
+          fi
+          if grep -Eq '^CONFIG_(WDT|DESIGNWARE_WATCHDOG)=y' .config; then
+            echo "nanokvm: U-Boot's watchdog driver hangs this board; the boot script arms it" >&2
             exit 1
           fi
         '';
@@ -192,6 +208,10 @@ in
         "earlycon=sbi"
         # Keep the OpenSBI firmware region reserved.
         "riscv.fwsz=${hex firmwareRegion}"
+        # The boot script arms the watchdog; the kernel feeds it until
+        # userspace opens it, and nothing may stop it on the way to a reset.
+        "watchdog.stop_on_reboot=0"
+        "watchdog.open_timeout=120"
         "loglevel=4"
       ];
     };

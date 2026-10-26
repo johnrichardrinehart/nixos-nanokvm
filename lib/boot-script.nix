@@ -29,6 +29,12 @@
 # such boots U-Boot resets the count and runs the recovery command (USB
 # fastboot) instead. Leaving fastboot (`fastboot continue`) boots normally.
 #
+# The hardware watchdog cannot be stopped once armed, so the script arms it
+# (armWatchdog) only after the recovery decision, before loading a slot.
+# Recovery itself therefore waits indefinitely. If no slot loads, the
+# fallback below is reset by the watchdog; those resets count as
+# unconfirmed boots and end in recovery.
+#
 # Counts are compared as strings, not with setexpr, so the script needs
 # nothing beyond the default hush parser and `test`.
 { lib }:
@@ -45,6 +51,8 @@
   saveenv ? null,
   sysboot ? part: "sysboot mmc 0:${part} any 0x80c00000 /extlinux/extlinux.conf",
   fallback ? "fastboot usb 0",
+  # Commands that start the hardware watchdog (empty: none).
+  armWatchdog ? "",
 }:
 let
   persistentVars = [
@@ -103,6 +111,7 @@ let
     (if saveenv == null then saveCommand else saveenv)
     ''if test "''${ab_recover}" = 1; then echo "nanokvm-ab: ${toString maxUnconfirmedBoots} boots without a healthy system, entering recovery"; ${fallback}; fi''
     ''if test "''${ab_slot}" = b; then setenv ab_part 3; else setenv ab_part 2; fi''
+    armWatchdog
     (sysboot "\${ab_part}")
     # sysboot only returns when the slot could not be loaded. Try the other
     # slot as a normal boot; Linux there sees the unfinished trial and

@@ -1,0 +1,287 @@
+{
+  "nodes": {
+    "aic8800-firmware-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1764661921,
+        "narHash": "sha256-lAbWNVC+R0NcG8/a/EDxhFKOKAfeY+rENRMwm4N36I0=",
+        "owner": "lxowalle",
+        "repo": "aic8800-sdio-firmware",
+        "rev": "c56f910044cc854d6c553bcb9a644f3bca5a4c38",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lxowalle",
+        "repo": "aic8800-sdio-firmware",
+        "rev": "c56f910044cc854d6c553bcb9a644f3bca5a4c38",
+        "type": "github"
+      }
+    },
+    "aic8800-radxa": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1782473402,
+        "narHash": "sha256-7M02L7G/cadlUWF3YG5CAumtmV7RmEbRHWqZQTddRUI=",
+        "owner": "radxa-pkg",
+        "repo": "aic8800",
+        "rev": "bd11969265809a0fc948f1107c8256bbb2c1aa60",
+        "type": "github"
+      },
+      "original": {
+        "owner": "radxa-pkg",
+        "repo": "aic8800",
+        "rev": "bd11969265809a0fc948f1107c8256bbb2c1aa60",
+        "type": "github"
+      }
+    },
+    "disko": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792526520,
+        "narHash": "sha256-3hSJlv8mUVnZPMWK2+CM7a9O+nR6Z4mCh27NfLCmTPc=",
+        "owner": "nix-community",
+        "repo": "disko",
+        "rev": "cedd626e11b635470fa6f9fdb8ad79b0075dd7f9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "disko",
+        "type": "github"
+      }
+    },
+    "disko_2": {
+      "inputs": {
+        "nixpkgs": [
+          "nanokvm",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792423376,
+        "narHash": "sha256-ex+GjOr75UrJwUmrLMYIfTOBNcC7iHxKUvwFfwUoSsk=",
+        "owner": "nix-community",
+        "repo": "disko",
+        "rev": "61c844e2c00909041ffcace3fc9ea20ecc9ef65c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "disko",
+        "type": "github"
+      }
+    },
+    "flake-compat": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1767039857,
+        "narHash": "sha256-vNpUSpF5Nuw8xvDLj2KCwwksIbjua2LZCqhV1LNRDns=",
+        "owner": "NixOS",
+        "repo": "flake-compat",
+        "rev": "5edf11c44bc78a0d334f6334cdaf7d60d732daab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "home-manager": {
+      "inputs": {
+        "nixpkgs": [
+          "nanokvm",
+          "impermanence",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1768598210,
+        "narHash": "sha256-kkgA32s/f4jaa4UG+2f8C225Qvclxnqs76mf8zvTVPg=",
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "rev": "c47b2cc64a629f8e075de52e4742de688f930dc6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "home-manager",
+        "type": "github"
+      }
+    },
+    "impermanence": {
+      "inputs": {
+        "home-manager": "home-manager",
+        "nixpkgs": [
+          "nanokvm",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1792503832,
+        "narHash": "sha256-WsqPR04nPS1bi5bYva04cJJcJyHw7x/rbaJmoXMzF04=",
+        "owner": "nix-community",
+        "repo": "impermanence",
+        "rev": "936ced36ecd25fcbd9b4789184b88aa2e4c2a901",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "impermanence",
+        "type": "github"
+      }
+    },
+    "licheerv-nano-build": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1768355376,
+        "narHash": "sha256-LFryuMpTdOsIDchsUO/sX9XE0qqTVDop98RLG5U6cy8=",
+        "ref": "refs/heads/main",
+        "rev": "d4003f15b35d43ad4842f427050ab2bba0114fa5",
+        "revCount": 199,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/sipeed/LicheeRV-Nano-Build"
+      },
+      "original": {
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/sipeed/LicheeRV-Nano-Build"
+      }
+    },
+    "mixos": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "pyproject-nix": "pyproject-nix"
+      },
+      "locked": {
+        "lastModified": 1792119427,
+        "narHash": "sha256-DZHkxmOUK0sKOux1HNEuZsQMcEYfAIeCxtUvgNLvj1k=",
+        "owner": "jmbaur",
+        "repo": "mixos",
+        "rev": "be7bce2e55a9ccdf8e4b980f2804b4a67b17849e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "jmbaur",
+        "repo": "mixos",
+        "type": "github"
+      }
+    },
+    "nanokvm": {
+      "inputs": {
+        "aic8800-firmware-src": "aic8800-firmware-src",
+        "aic8800-radxa": "aic8800-radxa",
+        "disko": "disko_2",
+        "impermanence": "impermanence",
+        "licheerv-nano-build": "licheerv-nano-build",
+        "nanokvm-src": "nanokvm-src",
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "sophgo-fiptool": "sophgo-fiptool"
+      },
+      "locked": {
+        "lastModified": 1792999813,
+        "narHash": "sha256-T1tAeEB1xM0HF4VD6eAvCn5WyXt8zTwvxgqqY4vDizM=",
+        "owner": "georgewhewell",
+        "repo": "nixos-nanokvm",
+        "rev": "b26373d2a1ef124491df1e78acc264223998cbbd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "georgewhewell",
+        "repo": "nixos-nanokvm",
+        "type": "github"
+      }
+    },
+    "nanokvm-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778235418,
+        "narHash": "sha256-/iYjAgVZIR/UOVXOF5bgkYwJs6VQnYyL0LQfnpK6xLM=",
+        "owner": "sipeed",
+        "repo": "NanoKVM",
+        "rev": "2ca5b19efe64266b5bcde7ef167b6961659154d6",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sipeed",
+        "repo": "NanoKVM",
+        "rev": "2ca5b19efe64266b5bcde7ef167b6961659154d6",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1792773339,
+        "narHash": "sha256-rZLrzrC6i+jnTAlvPZHogKDulY7WWDEv9hJeHieO7Zw=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3ec636362e1816bc2f0888fa0fa2c69f1bc9e504",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "pyproject-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "mixos",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1791657700,
+        "narHash": "sha256-vcCAvhtA7hG+/gOge29hYHy7I/dLkIsr5nLx4sFEQic=",
+        "owner": "pyproject-nix",
+        "repo": "pyproject.nix",
+        "rev": "ddc400a6883b042646d0940e65971bb7f7e96107",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pyproject-nix",
+        "repo": "pyproject.nix",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "disko": "disko",
+        "mixos": "mixos",
+        "nanokvm": "nanokvm",
+        "nixpkgs": "nixpkgs"
+      }
+    },
+    "sophgo-fiptool": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1730769376,
+        "narHash": "sha256-zpWvmPrRH+Z/Xjw0JpXpeqle2kkS6IE3nt1CJoiekk8=",
+        "owner": "sophgo",
+        "repo": "fiptool",
+        "rev": "7f59889c91f7d5d440d6a09aad0209f0aca3d09d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sophgo",
+        "repo": "fiptool",
+        "rev": "7f59889c91f7d5d440d6a09aad0209f0aca3d09d",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

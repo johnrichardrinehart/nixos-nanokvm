@@ -1,0 +1,18 @@
+Rebase of nixos-nanokvm's 0007-lmb-respect-SYS_MEM_TOP_HIDE-for-allocations
+onto U-Boot 2026.10, which added STARFIVE_JH7110 to the same default line.
+
+LMB_LIMIT_DMA_BELOW_RAM_TOP makes lmb_add_memory() reserve the part of a
+DRAM bank above gd->ram_top. Enable it whenever SYS_MEM_TOP_HIDE is
+non-zero, so LMB/EFI allocations respect the hidden top-of-RAM area.
+
+--- a/lib/Kconfig
++++ b/lib/Kconfig
+@@ -1314,7 +1314,7 @@ config SPL_LMB_ARCH_MEM_MAP
+ config LMB_LIMIT_DMA_BELOW_RAM_TOP
+ 	bool
+ 	depends on LMB
+-	default y if ARCH_BCM283X || ARCH_ROCKCHIP || STARFIVE_JH7110
++	default y if ARCH_BCM283X || ARCH_ROCKCHIP || STARFIVE_JH7110 || SYS_MEM_TOP_HIDE != 0x0
+ 	help
+ 	  Some architectures can not DMA above ram_top boundary,
+ 	  which is after 4 GiB or 32-bit boundary too. Limit the

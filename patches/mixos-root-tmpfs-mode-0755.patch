@@ -1,0 +1,12 @@
+--- a/src/init.zig
++++ b/src/init.zig
+@@ -128,6 +128,9 @@ pub fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
+     try root_dir.createDirPath(io, sysroot_relative);
+ 
+     var tmpfs = try Mount.init("tmpfs");
++    // tmpfs defaults to mode 1777, which would leave the new root
++    // world-writable (and makes sshd/dropbear reject authorized keys).
++    try tmpfs.setOption("mode", "0755");
+     try tmpfs.finish(root_dir, sysroot_relative, Mount.Options.NODEV | Mount.Options.NOSUID);
+ 
+     var sysroot_dir = try root_dir.openDir(io, sysroot_relative, .{});

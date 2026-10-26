@@ -218,6 +218,26 @@ in
 
     etc.hostname.source = pkgs.writeText "hostname" "${cfg.hostName}\n";
 
+    # mixos runs busybox ntpd when /etc/ntp.conf exists. Its event script
+    # keeps /run/ntp-synced while the clock is synchronised: the OLED shows
+    # UTC and Eastern time only then.
+    etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
+      server pool.ntp.org
+    '';
+    services.ntpd.run = lib.mkForce (
+      pkgs.writeScript "ntpd-run" ''
+        #!/bin/sh
+        rm -f /run/ntp-synced
+        exec /bin/ntpd -n -S ${pkgs.writeScript "ntp-event" ''
+          #!/bin/sh
+          case "$1" in
+            step | stratum | periodic) touch /run/ntp-synced ;;
+            unsync) rm -f /run/ntp-synced ;;
+          esac
+        ''}
+      ''
+    );
+
     services.dhcp.run = pkgs.writeScript "dhcp-run" ''
       #!/bin/sh
       ip link set eth0 up

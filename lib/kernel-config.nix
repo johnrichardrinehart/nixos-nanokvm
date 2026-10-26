@@ -22,7 +22,12 @@ with lib.kernel;
   ERRATA_THEAD_CMO = yes;
   RISCV_ISA_ZICBOM = yes;
   RISCV_ISA_SVPBMT = yes;
-  # The C906 vector unit is pre-ratification (XTheadVector), not RVV 1.0.
+  # The C906 vector unit is pre-ratification RVV 0.7.1 (XTheadVector).
+  # Linux enables it only with the DT listing "xtheadvector" and the
+  # GhostWrite mitigation off: its vector stores can write any physical
+  # address from userspace. Measured on the board it speeds up only the
+  # UYVY-to-planar step of MJPEG (23 -> 6 ms of a 250 ms frame); the tile
+  # compare is memory-bound and libjpeg/LZ4 have no XTheadVector code.
   RISCV_ISA_V = no;
   RISCV_ISA_C = yes;
   RISCV_SBI = yes; # console, timer and system reset go through OpenSBI
@@ -51,6 +56,10 @@ with lib.kernel;
   CPUFREQ_DT = yes;
   CPU_FREQ_GOV_ONDEMAND = yes; # schedutil needs SMP; the SG2002 has one core
   CPU_FREQ_DEFAULT_GOV_ONDEMAND = yes;
+  # Runtime PM: the VPSS and the Coda980 turn their clocks on in their
+  # runtime-resume callbacks, which never run without it (the VPSS then
+  # accepts jobs and never raises an interrupt).
+  PM = yes;
 
   # Console
   TTY = yes;
@@ -100,6 +109,12 @@ with lib.kernel;
   CMA = yes;
   DMA_CMA = yes;
   CMA_SIZE_MBYTES = freeform "24";
+  # nanokvm-kvm captures into CMA-heap buffers, which userspace maps
+  # cached; the capture driver's own buffers are mapped uncached.
+  # sg2002-h264-bridge shares buffers between the VPSS and the encoder
+  # through the same heap.
+  DMABUF_HEAPS = yes;
+  DMABUF_HEAPS_CMA = yes;
 
   # USB device: HID keyboard/mouse, virtual media, USB networking, serial
   USB_SUPPORT = yes;

@@ -80,6 +80,8 @@
             ./modules/board.nix
             ./modules/ssh.nix
             ./modules/mixos-fixes.nix
+            ./modules/display.nix
+            { nanokvm.display.version = self.shortRev or self.dirtyShortRev or "dev"; }
             ./configuration.nix
           ];
         };

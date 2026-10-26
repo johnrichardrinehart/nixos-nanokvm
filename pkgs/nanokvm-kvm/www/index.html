@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NanoKVM</title>
+<link rel="stylesheet" href="kvm.css">
+</head>
+<body>
+<header>
+  <span class="brand">nixos-nanokvm</span>
+  <label>Video <select id="mode"></select></label>
+  <span id="stats" class="muted"></span>
+  <span class="spacer"></span>
+  <span id="usb" class="pill" title="USB HID link to the target">USB</span>
+  <span id="caps" class="pill" title="Caps Lock on the target">Caps</span>
+  <span id="led" class="pill" title="Target power LED">Power LED</span>
+  <button id="paste" title="Type text into the target (US layout)">Paste</button>
+  <button id="cad" title="Send Ctrl+Alt+Delete">Ctrl+Alt+Del</button>
+  <button id="power" title="Short press of the power button">Power</button>
+  <button id="powerlong" title="Hold the power button for 5 s">Force off</button>
+  <button id="reset" title="Press the reset button">Reset</button>
+  <button id="full" title="Full screen; captures system shortcuts where the browser allows">Full screen</button>
+</header>
+<main>
+  <canvas id="screen" tabindex="0" width="1280" height="720"></canvas>
+  <div id="overlay">Connecting…</div>
+</main>
+<script src="kvm.js"></script>
+</body>
+</html>

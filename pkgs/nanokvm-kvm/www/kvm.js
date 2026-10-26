@@ -1,0 +1,319 @@
+// NanoKVM web client: draws the video the server sends over /ws and sends
+// keyboard, pointer and ATX commands back (protocol in kvm.c).
+"use strict";
+
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const overlay = document.getElementById("overlay");
+const $ = (id) => document.getElementById(id);
+let ws = null;
+let status = {};
+
+function send(s) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(s);
+}
+
+function resize(w, h) {
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+// --- Video ---------------------------------------------------------------
+
+// LZ4 block format decoder.
+function lz4(src, dst) {
+  let s = 0, d = 0;
+  while (s < src.length) {
+    const token = src[s++];
+    let lit = token >> 4;
+    if (lit === 15) for (let b = 255; b === 255; lit += b) b = src[s++];
+    dst.set(src.subarray(s, s + lit), d);
+    s += lit;
+    d += lit;
+    if (s >= src.length) break;
+    const off = src[s] | (src[s + 1] << 8);
+    s += 2;
+    let len = token & 15;
+    if (len === 15) for (let b = 255; b === 255; len += b) b = src[s++];
+    len += 4;
+    for (let i = 0; i < len; i++, d++) dst[d] = dst[d - off];
+  }
+  return d;
+}
+
+const clamp = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+const tileRaw = new Uint8Array(32 * 32 * 2);
+
+// UYVY (BT.601 limited range) into RGBA.
+function uyvyToRgba(src, img, w, h) {
+  const out = img.data;
+  for (let i = 0, o = 0, n = (w * h) / 2; i < n; i++) {
+    const u = src[4 * i] - 128, y0 = 1.164 * (src[4 * i + 1] - 16);
+    const v = src[4 * i + 2] - 128, y1 = 1.164 * (src[4 * i + 3] - 16);
+    const r = 1.596 * v, g = -0.392 * u - 0.813 * v, b = 2.017 * u;
+    out[o] = clamp(y0 + r); out[o + 1] = clamp(y0 + g); out[o + 2] = clamp(y0 + b); out[o + 3] = 255;
+    out[o + 4] = clamp(y1 + r); out[o + 5] = clamp(y1 + g); out[o + 6] = clamp(y1 + b); out[o + 7] = 255;
+    o += 8;
+  }
+}
+
+const tileImages = new Map();
+function tileImage(w, h) {
+  const k = w * 64 + h;
+  if (!tileImages.has(k)) tileImages.set(k, ctx.createImageData(w, h));
+  return tileImages.get(k);
+}
+
+function drawTiles(buf) {
+  const v = new DataView(buf);
+  resize(v.getUint16(2, true), v.getUint16(4, true));
+  const n = v.getUint16(6, true);
+  const bytes = new Uint8Array(buf);
+  let p = 8;
+  for (let i = 0; i < n; i++) {
+    const x = v.getUint16(p, true), y = v.getUint16(p + 2, true);
+    const w = v.getUint16(p + 4, true), h = v.getUint16(p + 6, true);
+    const size = v.getUint32(p + 8, true);
+    p += 12;
+    lz4(bytes.subarray(p, p + size), tileRaw);
+    p += size;
+    const img = tileImage(w, h);
+    uyvyToRgba(tileRaw, img, w, h);
+    ctx.putImageData(img, x, y);
+  }
+}
+
+let jpegBusy = false, jpegNext = null;
+async function drawJpeg(buf) {
+  if (jpegBusy) { jpegNext = buf; return; }
+  jpegBusy = true;
+  try {
+    const v = new DataView(buf);
+    const w = v.getUint16(2, true), h = v.getUint16(4, true);
+    const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 6)], { type: "image/jpeg" }));
+    // mjpeg-half arrives at half size: keep the canvas at the source size.
+    resize(status.width || w, status.height || h);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    bmp.close();
+  } finally {
+    jpegBusy = false;
+    if (jpegNext) { const b = jpegNext; jpegNext = null; drawJpeg(b); }
+  }
+}
+
+let decoder = null, decoderCodec = "";
+// avc1.PPCCLL from the SPS (NAL type 7).
+function codecFromSps(au) {
+  for (let i = 0; i + 4 < au.length; i++)
+    if (au[i] === 0 && au[i + 1] === 0 && au[i + 2] === 1 && (au[i + 3] & 0x1f) === 7) {
+      const hex = (b) => b.toString(16).padStart(2, "0");
+      return "avc1." + hex(au[i + 4]) + hex(au[i + 5]) + hex(au[i + 6]);
+    }
+  return null;
+}
+
+function drawH264(buf) {
+  if (!("VideoDecoder" in window)) {
+    overlay.textContent = "This browser has no WebCodecs (needs HTTPS or localhost): choose tiles or mjpeg";
+    return;
+  }
+  const v = new DataView(buf);
+  const key = v.getUint8(1) === 1;
+  const au = new Uint8Array(buf, 6);
+  if (key) {
+    const codec = codecFromSps(au);
+    if (codec && (!decoder || codec !== decoderCodec || decoder.state === "closed")) {
+      if (decoder && decoder.state !== "closed") decoder.close();
+      decoder = new VideoDecoder({
+        output: (frame) => {
+          resize(frame.displayWidth, frame.displayHeight);
+          ctx.drawImage(frame, 0, 0);
+          frame.close();
+        },
+        error: (e) => { overlay.textContent = "H.264: " + e.message; decoder = null; send("key"); },
+      });
+      decoder.configure({ codec, optimizeForLatency: true });
+      decoderCodec = codec;
+    }
+  }
+  if (!decoder || decoder.state !== "configured") return;
+  if (decoder.decodeQueueSize > 4 && !key) return;
+  decoder.decode(new EncodedVideoChunk({ type: key ? "key" : "delta", timestamp: performance.now() * 1000, data: au }));
+}
+
+// --- Status --------------------------------------------------------------
+
+function onStatus(s) {
+  const modeChanged = s.mode !== status.mode;
+  status = s;
+  const sel = $("mode");
+  if (sel.options.length !== s.modes.length)
+    sel.replaceChildren(...s.modes.map((m) => new Option(m, m)));
+  sel.value = s.mode;
+  $("stats").textContent = s.signal
+    ? `${s.width}×${s.height} · ${s.fps.toFixed(1)} fps · ${(s.kbps / 1000).toFixed(1)} Mbit/s · ${s.encode_ms.toFixed(0)} ms/frame`
+    : "";
+  overlay.textContent = s.signal ? "" : "No HDMI signal";
+  $("usb").classList.toggle("on", s.usb === "configured");
+  $("caps").classList.toggle("on", (s.leds & 2) !== 0);
+  $("led").classList.toggle("on", s.power_led === 1);
+  if (modeChanged) send("key");
+}
+
+// --- Connection ----------------------------------------------------------
+
+function connect() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { overlay.textContent = ""; send("key"); };
+  ws.onclose = () => { overlay.textContent = "Disconnected; reconnecting…"; setTimeout(connect, 1000); };
+  ws.onmessage = (e) => {
+    if (typeof e.data === "string") {
+      const s = JSON.parse(e.data);
+      if (s.t === "status") onStatus(s);
+      return;
+    }
+    const type = new Uint8Array(e.data, 0, 1)[0];
+    if (type === 1) drawTiles(e.data);
+    else if (type === 2) drawJpeg(e.data);
+    else if (type === 3) drawH264(e.data);
+  };
+}
+
+$("mode").onchange = (e) => send("mode " + e.target.value);
+
+// --- Keyboard ------------------------------------------------------------
+
+// KeyboardEvent.code -> USB HID usage (keyboard page).
+const usage = {};
+"abcdefghijklmnopqrstuvwxyz".split("").forEach((c, i) => (usage["Key" + c.toUpperCase()] = 4 + i));
+"1234567890".split("").forEach((c, i) => (usage["Digit" + c] = 30 + i));
+Object.assign(usage, {
+  Enter: 40, Escape: 41, Backspace: 42, Tab: 43, Space: 44, Minus: 45, Equal: 46, BracketLeft: 47,
+  BracketRight: 48, Backslash: 49, Semicolon: 51, Quote: 52, Backquote: 53, Comma: 54, Period: 55,
+  Slash: 56, CapsLock: 57, PrintScreen: 70, ScrollLock: 71, Pause: 72, Insert: 73, Home: 74,
+  PageUp: 75, Delete: 76, End: 77, PageDown: 78, ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81,
+  ArrowUp: 82, NumLock: 83, NumpadDivide: 84, NumpadMultiply: 85, NumpadSubtract: 86, NumpadAdd: 87,
+  NumpadEnter: 88, NumpadDecimal: 99, IntlBackslash: 100, ContextMenu: 101, NumpadEqual: 103,
+  IntlRo: 135, IntlYen: 137,
+  ControlLeft: 0xe0, ShiftLeft: 0xe1, AltLeft: 0xe2, MetaLeft: 0xe3,
+  ControlRight: 0xe4, ShiftRight: 0xe5, AltRight: 0xe6, MetaRight: 0xe7,
+});
+for (let i = 1; i <= 12; i++) usage["F" + i] = 57 + i;
+for (let i = 13; i <= 24; i++) usage["F" + i] = 104 + i - 13;
+for (let i = 1; i <= 9; i++) usage["Numpad" + i] = 88 + i;
+usage.Numpad0 = 98;
+
+function key(e, down) {
+  const u = usage[e.code];
+  if (u === undefined) return;
+  e.preventDefault();
+  send(`k ${u} ${down ? 1 : 0}`);
+}
+canvas.addEventListener("keydown", (e) => key(e, true));
+canvas.addEventListener("keyup", (e) => key(e, false));
+canvas.addEventListener("blur", () => send("r"));
+
+function tap(...usages) {
+  usages.forEach((u) => send(`k ${u} 1`));
+  usages.slice().reverse().forEach((u) => send(`k ${u} 0`));
+}
+$("cad").onclick = () => { tap(0xe0, 0xe2, 76); canvas.focus(); };
+
+// Text -> key taps on a US layout.
+const shifted = '~!@#$%^&*()_+{}|:"<>?';
+const unshifted = "`1234567890-=[]\\;',./";
+function charKeys(c) {
+  if (c >= "a" && c <= "z") return [false, 4 + c.charCodeAt(0) - 97];
+  if (c >= "A" && c <= "Z") return [true, 4 + c.charCodeAt(0) - 65];
+  if (c >= "1" && c <= "9") return [false, 30 + c.charCodeAt(0) - 49];
+  if (c === "0") return [false, 39];
+  if (c === " ") return [false, 44];
+  if (c === "\n") return [false, 40];
+  if (c === "\t") return [false, 43];
+  const codes = [53, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 45, 46, 47, 48, 49, 51, 52, 54, 55, 56];
+  let i = unshifted.indexOf(c);
+  if (i >= 0) return [false, codes[i]];
+  i = shifted.indexOf(c);
+  if (i >= 0) return [true, codes[i]];
+  return null;
+}
+$("paste").onclick = async () => {
+  let text = "";
+  try { text = await navigator.clipboard.readText(); } catch { /* not allowed */ }
+  text = prompt("Text to type into the target (US layout):", text);
+  if (!text) return;
+  for (const c of text.replace(/\r\n/g, "\n")) {
+    const k = charKeys(c);
+    if (!k) continue;
+    if (k[0]) tap(0xe1, k[1]);
+    else tap(k[1]);
+  }
+  canvas.focus();
+};
+
+// --- Pointer -------------------------------------------------------------
+
+let buttons = 0, pending = null, wheel = 0;
+function pointer(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = Math.round(((e.clientX - r.left) / r.width) * 32767);
+  const y = Math.round(((e.clientY - r.top) / r.height) * 32767);
+  pending = [x, y];
+}
+function flushPointer() {
+  if (pending || wheel) {
+    const [x, y] = pending || [lastX, lastY];
+    lastX = x; lastY = y;
+    send(`m ${x} ${y} ${buttons} ${wheel}`);
+    pending = null;
+    wheel = 0;
+  }
+  requestAnimationFrame(flushPointer);
+}
+let lastX = 0, lastY = 0;
+requestAnimationFrame(flushPointer);
+const buttonBit = [1, 4, 2, 8, 16]; // DOM left, middle, right, back, forward
+canvas.addEventListener("mousemove", pointer);
+canvas.addEventListener("mousedown", (e) => {
+  canvas.focus();
+  pointer(e);
+  buttons |= buttonBit[e.button] || 0;
+  pending = pending || [lastX, lastY];
+  flushPointerNow();
+  e.preventDefault();
+});
+canvas.addEventListener("mouseup", (e) => {
+  pointer(e);
+  buttons &= ~(buttonBit[e.button] || 0);
+  flushPointerNow();
+  e.preventDefault();
+});
+function flushPointerNow() {
+  const [x, y] = pending || [lastX, lastY];
+  lastX = x; lastY = y;
+  send(`m ${x} ${y} ${buttons} 0`);
+  pending = null;
+}
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  wheel += e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0;
+}, { passive: false });
+
+// --- ATX and full screen ------------------------------------------------
+
+// Press lengths as in Sipeed's UI: 800 ms short, 5 s to force off.
+$("power").onclick = () => send("atx power 800");
+$("powerlong").onclick = () => { if (confirm("Hold the target's power button for 5 seconds?")) send("atx power 5000"); };
+$("reset").onclick = () => { if (confirm("Press the target's reset button?")) send("atx reset 800"); };
+$("full").onclick = async () => {
+  await document.documentElement.requestFullscreen();
+  if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock().catch(() => {});
+  canvas.focus();
+};
+
+connect();
+canvas.focus();

@@ -93,14 +93,29 @@
       packages = lib.genAttrs hostSystems (
         system:
         let
+          pkgs = pkgsFor system;
           build = systems.${linuxBuilderFor system}.config.system.build;
         in
         {
           sd-image = build.sdImage;
           slot = build.slot;
           fip = build.fip;
+          deploy = pkgs.callPackage ./pkgs/nanokvm-deploy.nix {
+            inherit (build) slot;
+            inherit (systems.${linuxBuilderFor system}.config.nanokvm.ab) maxTries;
+          };
+          default = self.packages.${system}.deploy;
         }
       );
+
+      apps = lib.genAttrs hostSystems (system: {
+        deploy = {
+          type = "app";
+          program = lib.getExe self.packages.${system}.deploy;
+          meta.description = "Deploy this flake's image to a NanoKVM's inactive slot";
+        };
+        default = self.apps.${system}.deploy;
+      });
 
       checks = lib.genAttrs buildSystems (
         system:

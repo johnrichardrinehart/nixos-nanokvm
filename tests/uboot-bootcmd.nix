@@ -29,7 +29,23 @@ let
       ];
     saveenv = "echo SAVEENV";
     fallback = ''if test -z "''${booted}"; then echo FASTBOOT; fi'';
+    armWatchdog = "echo ARM";
   };
+
+  # Each boot arms the watchdog once, after saving the state (and after
+  # recovery returns), right before its first load attempt.
+  withArm =
+    lines:
+    lib.concatLists (
+      lib.imap0 (
+        i: line:
+        let
+          prev = if i == 0 then "" else lib.elemAt lines (i - 1);
+          load = lib.hasPrefix "BOOT " line || lib.hasPrefix "LOADFAIL " line;
+        in
+        lib.optional (load && (prev == "SAVEENV" || prev == "FASTBOOT")) "ARM" ++ [ line ]
+      ) lines
+    );
 
   boot = "setenv booted; run abboot; echo STATE active=\${ab_active} try=\${ab_try} tries=\${ab_tries} failed=\${ab_failed} boots=\${ab_boots}";
 
@@ -180,7 +196,7 @@ let
   runScenario = name: s: ''
     echo "--- ${name}"
     cat > expected <<'EOF'
-    ${lib.concatStringsSep "\n" s.expect}
+    ${lib.concatStringsSep "\n" (withArm s.expect)}
     EOF
     commands=${
       lib.escapeShellArg (
@@ -198,7 +214,7 @@ let
     }
     # The sandbox console uses CRLF and appends ANSI colour codes.
     tr -d '\r' < output | sed 's/\x1b\[[0-9;]*m//g' \
-      | grep -E '^(BOOT |LOADFAIL |STATE |SAVEENV$|FASTBOOT$)' > actual || true
+      | grep -E '^(BOOT |LOADFAIL |STATE |SAVEENV$|FASTBOOT$|ARM$)' > actual || true
     if ! diff -u expected actual; then
       echo "full sandbox output:"
       cat output

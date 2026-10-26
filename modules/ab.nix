@@ -20,6 +20,7 @@ let
   # Not named after the packages: `with pkgs.buildPackages; [ zstd ]` in the
   # image builders must not pick up these riscv64 binaries.
   zstdBins = staticBins "zstd" pkgs.zstd [ "zstd" ];
+  busyboxBins = staticBins "busybox" pkgs.busybox [ "busybox" ];
   btrfsBins = staticBins "btrfs-progs" pkgs.btrfs-progs [
     "btrfs"
     "mkfs.btrfs"
@@ -337,6 +338,12 @@ in
     system.build = {
       nanokvmAb = tool;
       inherit slot slotImage sdImage;
+      # Run from RAM on Sipeed's stock firmware by flash-from-stock, which
+      # overwrites the card those programs would otherwise be read from.
+      stockFlashTools = {
+        busybox = "${busyboxBins}/bin/busybox";
+        zstd = "${zstdBins}/bin/zstd";
+      };
     };
   };
 }

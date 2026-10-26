@@ -105,6 +105,11 @@
             inherit (systems.${linuxBuilderFor system}.config.nanokvm.ab) maxTries;
           };
           default = self.packages.${system}.deploy;
+          flash-from-stock = pkgs.callPackage ./pkgs/nanokvm-flash-from-stock.nix {
+            inherit (build) sdImage;
+            deviceTools = build.stockFlashTools;
+            deviceArch = "riscv64";
+          };
         }
       );
 
@@ -115,6 +120,11 @@
           meta.description = "Deploy this flake's image to a NanoKVM's inactive slot";
         };
         default = self.apps.${system}.deploy;
+        flash-from-stock = {
+          type = "app";
+          program = lib.getExe self.packages.${system}.flash-from-stock;
+          meta.description = "Replace a NanoKVM's stock firmware with this flake's image over SSH";
+        };
       });
 
       checks = lib.genAttrs buildSystems (
@@ -145,6 +155,7 @@
           fastboot-flash = pkgs.callPackage ./tests/fastboot-flash.nix {
             inherit sandbox layout;
           };
+          flash-from-stock = pkgs.testers.runNixOSTest ./tests/flash-from-stock.nix;
           kernel-config = pkgs.callPackage ./tests/kernel-config.nix {
             inherit (systems.${system}.config.system.build) kernel;
             inherit (systems.${system}.config.nanokvm.ab) fdt;

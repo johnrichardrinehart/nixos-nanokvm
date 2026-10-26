@@ -113,6 +113,16 @@
             deviceTools = build.stockFlashTools;
             deviceArch = "riscv64";
           };
+          flash-sd = pkgs.callPackage ./pkgs/nanokvm-flash-sd.nix {
+            # macOS writes release downloads (--image) without needing a
+            # Linux builder for this flake's image.
+            sdImage = if lib.hasSuffix "-darwin" system then null else build.sdImage;
+            firmwareOffset =
+              let
+                ab = systems.${linuxBuilderFor system}.config.nanokvm.ab;
+              in
+              (import ./lib/layout.nix { inherit (ab) slotSizeMiB disk; }).firmware.start * 512;
+          };
         }
       );
 
@@ -127,6 +137,11 @@
           type = "app";
           program = lib.getExe self.packages.${system}.flash-from-stock;
           meta.description = "Replace a NanoKVM's stock firmware with this flake's image over SSH";
+        };
+        flash-sd = {
+          type = "app";
+          program = lib.getExe self.packages.${system}.flash-sd;
+          meta.description = "Write this flake's image to an SD card in this machine's reader";
         };
       });
 
@@ -159,6 +174,7 @@
             inherit sandbox layout;
           };
           flash-from-stock = pkgs.testers.runNixOSTest ./tests/flash-from-stock.nix;
+          flash-sd = pkgs.testers.runNixOSTest ./tests/flash-sd.nix;
           kernel-config = pkgs.callPackage ./tests/kernel-config.nix {
             inherit (systems.${system}.config.system.build) kernel;
             inherit (systems.${system}.config.nanokvm.ab) fdt;

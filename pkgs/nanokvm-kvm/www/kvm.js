@@ -223,10 +223,19 @@ for (let i = 13; i <= 24; i++) usage["F" + i] = 104 + i - 13;
 for (let i = 1; i <= 9; i++) usage["Numpad" + i] = 88 + i;
 usage.Numpad0 = 98;
 
+// macOS browsers report Caps Lock as one event per press: keydown when it
+// turns on, keyup when it turns off. Each is a whole press for the target.
+const capsPerEvent = /Mac/.test(navigator.platform);
+
 function key(e, down) {
   const u = usage[e.code];
   if (u === undefined) return;
   e.preventDefault();
+  if (e.code === "CapsLock" && capsPerEvent) {
+    send(`k ${u} 1`);
+    send(`k ${u} 0`);
+    return;
+  }
   send(`k ${u} ${down ? 1 : 0}`);
 }
 canvas.addEventListener("keydown", (e) => key(e, true));

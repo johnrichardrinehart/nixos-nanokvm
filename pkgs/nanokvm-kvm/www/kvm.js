@@ -165,6 +165,7 @@ function onStatus(s) {
   $("stats").textContent = s.signal
     ? `${s.width}×${s.height} · ${s.fps.toFixed(1)} fps · ${(s.kbps / 1000).toFixed(1)} Mbit/s · ${s.encode_ms.toFixed(0)} ms/frame`
     : "";
+  $("viewers").textContent = `${s.viewers} viewer${s.viewers === 1 ? "" : "s"}`;
   if (!note.until || performance.now() > note.until) overlay.textContent = s.signal ? "" : "No HDMI signal";
   $("usb").classList.toggle("on", s.usb === "configured");
   $("caps").classList.toggle("on", (s.leds & 2) !== 0);

@@ -14,6 +14,21 @@ let
   ab = config.nanokvm.ab;
   layout = import ../lib/layout.nix { inherit (ab) slotSizeMiB disk; };
   hex = n: "0x${lib.toLower (lib.toHexString n)}";
+  c906l = import ../lib/c906l.nix;
+
+  # Linux must never map the C906L's region (lib/c906l.nix): reserved no-map
+  # in the device tree it boots with.
+  fdt =
+    pkgs.buildPackages.runCommand "sg2002-cube-c906l.dtb"
+      { nativeBuildInputs = [ pkgs.buildPackages.dtc ]; }
+      ''
+        cp ${boardPkgs.sg2002-dtb-mainline-cube} $out
+        chmod u+w $out
+        node=/reserved-memory/c906l@${lib.toLower (lib.toHexString c906l.base)}
+        fdtput -c $out $node
+        fdtput -t x $out $node reg ${lib.toHexString c906l.base} ${lib.toHexString c906l.size}
+        fdtput -t s $out $node no-map ""
+      '';
 
   bootScript = import ../lib/boot-script.nix { inherit lib; } {
     inherit (ab) maxTries maxUnconfirmedBoots;
@@ -58,6 +73,8 @@ let
   uboot =
     (boardPkgs.sg2002-uboot-mainline.override {
       bootCommand = lib.escape [ "\\" "\"" ] bootScript;
+      # The C906L's region (lib/c906l.nix) stays out of U-Boot's reach.
+      memoryTopHide = c906l.size;
     }).overrideAttrs
       (old: {
         extraConfig = old.extraConfig + ubootConfig;
@@ -201,7 +218,7 @@ in
       envTools = pkgs.callPackage ../pkgs/uboot-env-tools.nix {
         inherit (uboot) src version;
       };
-      fdt = boardPkgs.sg2002-dtb-mainline-cube;
+      inherit fdt;
       inherit fip;
       kernelParams = [
         "console=ttyS0,115200"

@@ -85,22 +85,20 @@ function drawTiles(buf) {
   }
 }
 
-let jpegBusy = false, jpegNext = null;
-async function drawJpeg(buf) {
-  if (jpegBusy) { jpegNext = buf; return; }
-  jpegBusy = true;
-  try {
+// Bands of rows (u8 2, u8 0, u16 w, u16 h, u16 y, JPEG): decoded and drawn
+// in arrival order, since each covers only the rows that changed.
+let jpegChain = Promise.resolve();
+function drawJpeg(buf) {
+  jpegChain = jpegChain.then(async () => {
     const v = new DataView(buf);
-    const w = v.getUint16(2, true), h = v.getUint16(4, true);
-    const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 6)], { type: "image/jpeg" }));
+    const w = v.getUint16(2, true), h = v.getUint16(4, true), y = v.getUint16(6, true);
+    const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 8)], { type: "image/jpeg" }));
     // mjpeg-half arrives at half size: keep the canvas at the source size.
     resize(status.width || w, status.height || h);
-    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const sx = canvas.width / w, sy = canvas.height / h;
+    ctx.drawImage(bmp, 0, y * sy, bmp.width * sx, bmp.height * sy);
     bmp.close();
-  } finally {
-    jpegBusy = false;
-    if (jpegNext) { const b = jpegNext; jpegNext = null; drawJpeg(b); }
-  }
+  }).catch(() => {});
 }
 
 let decoder = null, decoderCodec = "";

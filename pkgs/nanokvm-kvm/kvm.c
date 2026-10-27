@@ -709,7 +709,9 @@ struct planes {
 	int v420;
 };
 
-static struct msg *jpeg_message(const struct planes *pl, int quality)
+// Message: u8 2, u8 0, u16 w, u16 h (the whole picture), u16 y, then a JPEG
+// of the band of rows from y down: only the rows that changed are sent.
+static struct msg *jpeg_message(const struct planes *pl, int quality, int fw, int fh, int y)
 {
 	struct jpeg_compress_struct c;
 	struct jpeg_error_mgr e;
@@ -749,16 +751,16 @@ static struct msg *jpeg_message(const struct planes *pl, int quality)
 	}
 	jpeg_finish_compress(&c);
 	jpeg_destroy_compress(&c);
-	// Message: u8 2, u8 0, u16 w, u16 h, JPEG.
-	struct msg *m = msg_new(6 + outlen);
+	struct msg *m = msg_new(8 + outlen);
 	if (m) {
 		uint8_t *p = msg_payload(m);
 		p[0] = 2;
 		p[1] = 0;
-		put16(p + 2, (unsigned)pl->w);
-		put16(p + 4, (unsigned)pl->h);
-		memcpy(p + 6, out, outlen);
-		msg_frame(m, 6 + outlen, 0);
+		put16(p + 2, (unsigned)fw);
+		put16(p + 4, (unsigned)fh);
+		put16(p + 6, (unsigned)y);
+		memcpy(p + 8, out, outlen);
+		msg_frame(m, 8 + outlen, 0);
 	}
 	free(out);
 	return m;
@@ -807,18 +809,18 @@ static void uyvy_planes(struct planes *pl, const uint8_t *src, int w, int h, int
 	}
 }
 
-// Planar 4:2:0 from the VPSS's NV12 output.
-static void nv12_planes(struct planes *pl, const uint8_t *nv12, int w, int h, int stride)
+// Planar 4:2:0 from rows [y0, y1) of the VPSS's NV12 output (y0 even).
+static void nv12_planes(struct planes *pl, const uint8_t *nv12, int w, int h, int stride, int y0, int y1)
 {
 	pl->w = w;
-	pl->h = h;
+	pl->h = y1 - y0;
 	pl->ys = w;
 	pl->cs = w / 2;
 	pl->v420 = 1;
-	for (int y = 0; y < h; y++)
-		memcpy(pl->y + (size_t)y * w, nv12 + (size_t)y * stride, (size_t)w);
-	const uint8_t *uv = nv12 + (size_t)stride * h;
-	for (int y = 0; y < h / 2; y++) {
+	for (int y = 0; y < pl->h; y++)
+		memcpy(pl->y + (size_t)y * w, nv12 + (size_t)(y0 + y) * stride, (size_t)w);
+	const uint8_t *uv = nv12 + (size_t)stride * h + (size_t)(y0 / 2) * stride;
+	for (int y = 0; y < pl->h / 2; y++) {
 		const uint8_t *s = uv + (size_t)y * stride;
 		uint8_t *pu = pl->u + (size_t)y * pl->cs, *pv = pl->v + (size_t)y * pl->cs;
 		for (int x = 0; x < w / 2; x++) {
@@ -826,6 +828,233 @@ static void nv12_planes(struct planes *pl, const uint8_t *nv12, int w, int h, in
 			pv[x] = s[2 * x + 1];
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// C906L offload: nanokvm-kvm loads c906l/main.c's firmware into the region
+// in lib/c906l.nix and starts the 700 MHz C906L there. In the MJPEG modes
+// it encodes the bottom part of each changed band while this core encodes
+// the top (protocol.h). Without the firmware or on any failure, everything
+// runs here.
+
+#include "c906l/protocol.h"
+
+static const char *c906l_firmware; // --c906l PATH
+
+static struct {
+	int ready;
+	uint8_t *region; // mapped cached; shared lines go through civa()
+	volatile struct c906l_status *status;
+	volatile struct c906l_job *job;
+	uint8_t *out, *in;
+	uint32_t seq;
+	int active, w, h, y; // the band in flight: picture size, first row
+	double t0;
+} c906l;
+
+// Clean and invalidate the data cache over [p, p + n): th.dcache.civa, the
+// one T-Head cache operation user mode may execute, then th.sync.s.
+static void civa(const volatile void *p, size_t n)
+{
+	uintptr_t a = (uintptr_t)p & ~(uintptr_t)63, end = (uintptr_t)p + n;
+	for (; a < end; a += 64) {
+		register uintptr_t a0 __asm__("a0") = a;
+		__asm__ volatile(".long 0x0275000b" ::"r"(a0) : "memory");
+	}
+	__asm__ volatile(".long 0x0190000b" ::: "memory");
+}
+
+static void *devmem_map(int fd, unsigned long phys, size_t len)
+{
+	void *p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)phys);
+	return p == MAP_FAILED ? NULL : p;
+}
+
+static void reg_update(volatile uint32_t *r, uint32_t clear, uint32_t set)
+{
+	*r = (*r & ~clear) | set;
+	__sync_synchronize();
+}
+
+static void c906l_post(const struct c906l_job *j)
+{
+	volatile struct c906l_job *d = c906l.job;
+	d->type = j->type;
+	d->width = j->width;
+	d->height = j->height;
+	d->stride = j->stride;
+	d->frame = j->frame;
+	d->quality = j->quality;
+	d->half = j->half;
+	civa(d, sizeof *d);
+	d->seq = ++c906l.seq;
+	civa(d, sizeof *d);
+	c906l.active = 1;
+	c906l.t0 = now();
+}
+
+static const volatile struct c906l_status *c906l_status(void)
+{
+	civa(c906l.status, sizeof *c906l.status);
+	return c906l.status;
+}
+
+// 1 when Linux owns none of the region: an older fip.bin, which does not
+// hide it from Linux, leaves it in System RAM.
+static int c906l_region_free(void)
+{
+	FILE *f = fopen("/proc/iomem", "r");
+	char line[128];
+	unsigned long a, b;
+	int ok = f != NULL;
+	while (ok && fgets(line, sizeof line, f))
+		if (sscanf(line, "%lx-%lx", &a, &b) == 2 && strstr(line, ": System RAM") &&
+		    a < C906L_BASE + C906L_SIZE && b >= C906L_BASE)
+			ok = 0;
+	if (f)
+		fclose(f);
+	return ok;
+}
+
+// Loads the firmware and (re)starts the C906L. A running firmware is parked
+// first, so the reset never cuts it off mid-transfer (the TRM asks for a
+// quiet bus).
+static int c906l_start(void)
+{
+	if (!c906l_region_free()) {
+		log("c906l: 0x%lx is Linux's memory (fip.bin predates the C906L); not starting it", C906L_BASE);
+		return -1;
+	}
+	int fd = open("/dev/mem", O_RDWR | O_CLOEXEC);          // the region: cached
+	int io = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC); // registers
+	if (fd < 0 || io < 0) {
+		log("c906l: /dev/mem: %s", strerror(errno));
+		return -1;
+	}
+	c906l.region = devmem_map(fd, C906L_BASE, C906L_SIZE);
+	volatile uint32_t *rst = devmem_map(io, 0x03003000, 4096);
+	volatile uint32_t *sec = devmem_map(io, 0x020b0000, 4096);
+	close(fd);
+	close(io);
+	if (!c906l.region || !rst || !sec) {
+		log("c906l: cannot map the region or its control registers");
+		return -1;
+	}
+	uint8_t *control = c906l.region + (C906L_CONTROL - C906L_BASE);
+	c906l.status = (void *)control;
+	c906l.job = (void *)(control + 64);
+	c906l.out = c906l.region + (C906L_OUTPUT - C906L_BASE);
+	c906l.in = c906l.region + (C906L_INPUT - C906L_BASE);
+
+	if ((rst[0x24 / 4] & (1u << 6)) && c906l_status()->magic == C906L_MAGIC) {
+		struct c906l_job park = { .type = C906L_JOB_PARK };
+		c906l.seq = c906l_status()->done;
+		c906l_post(&park);
+		for (int i = 0; i < 100 && !c906l_status()->parked; i++)
+			usleep(10000);
+	}
+
+	FILE *f = fopen(c906l_firmware, "rb");
+	if (!f) {
+		log("c906l: %s: %s", c906l_firmware, strerror(errno));
+		return -1;
+	}
+	size_t n = fread(c906l.region, 1, C906L_CONTROL - C906L_BASE, f);
+	fclose(f);
+	memset(control, 0, 4096);
+	civa(c906l.region, C906L_CONTROL - C906L_BASE + 4096);
+
+	// The FSBL's reset_c906l: hold, set the reset vector, release.
+	reg_update(&rst[0x24 / 4], 1u << 6, 0);
+	reg_update(&sec[0x04 / 4], 0, 1u << 13);
+	sec[0x20 / 4] = (uint32_t)C906L_BASE;
+	sec[0x24 / 4] = (uint32_t)(C906L_BASE >> 32);
+	__sync_synchronize();
+	reg_update(&rst[0x24 / 4], 0, 1u << 6);
+
+	uint32_t beat = 0;
+	for (int i = 0; i < 100; i++) {
+		usleep(10000);
+		const volatile struct c906l_status *s = c906l_status();
+		if (s->magic != C906L_MAGIC || s->version != C906L_VERSION)
+			continue;
+		if (!beat)
+			beat = s->heartbeat + 1;
+		else if (s->heartbeat >= beat) {
+			c906l.seq = s->done;
+			c906l.active = 0;
+			c906l.ready = 1;
+			log("c906l: firmware running (%zu bytes)", n);
+			return 0;
+		}
+	}
+	log("c906l: firmware did not come up");
+	return -1;
+}
+
+static int c906l_done(void) { return c906l_status()->done == c906l.seq; }
+
+// Waits for the job in flight; 0 when it finished, -1 when the C906L
+// stopped answering (offload then turns off).
+static int c906l_wait(void)
+{
+	for (int i = 0; i < 4000 && !c906l_done(); i++)
+		usleep(500);
+	c906l.active = 0;
+	if (c906l_done())
+		return 0;
+	log("c906l: job %u timed out; compressing on this core from now on", c906l.seq);
+	c906l.ready = 0;
+	return -1;
+}
+
+// The finished band as a WebSocket message, or NULL.
+static struct msg *c906l_message(void)
+{
+	const volatile struct c906l_status *s = c906l_status();
+	uint32_t len = s->length;
+	c906l.active = 0;
+	if (s->result != C906L_OK || len > C906L_OUTPUT_SIZE) {
+		log("c906l: job failed (%u)", s->result);
+		return NULL;
+	}
+	struct msg *m = msg_new(8 + len);
+	if (!m)
+		return NULL;
+	uint8_t *p = msg_payload(m);
+	p[0] = 2;
+	p[1] = 0;
+	put16(p + 2, (unsigned)c906l.w);
+	put16(p + 4, (unsigned)c906l.h);
+	put16(p + 6, (unsigned)c906l.y);
+	civa(c906l.out, len);
+	memcpy(p + 8, c906l.out, len);
+	msg_frame(m, 8 + len, 0);
+	return m;
+}
+
+// Hands rows [y0, y1) of the frame to the C906L, copied into its input slot
+// (at half size, only the even rows it reads; y0 is even).
+static void c906l_submit(const uint8_t *frame, int stride, int w, int h, int y0, int y1, int half)
+{
+	const size_t rb = (size_t)w * 2;
+	uint8_t *in = c906l.in + (size_t)y0 * rb;
+	for (int y = y0; y < y1; y += half ? 2 : 1)
+		memcpy(c906l.in + (size_t)y * rb, frame + (size_t)y * stride, rb);
+	civa(in, rb * (size_t)(y1 - y0));
+	struct c906l_job j = {
+		.type = C906L_JOB_JPEG,
+		.width = (uint32_t)w,
+		.height = (uint32_t)(y1 - y0),
+		.stride = (uint32_t)rb,
+		.frame = C906L_INPUT + (uint64_t)y0 * rb,
+		.quality = (uint32_t)jpeg_quality,
+		.half = (uint32_t)half,
+	};
+	c906l.w = half ? w / 2 : w;
+	c906l.h = half ? h / 2 : h;
+	c906l.y = half ? y0 / 2 : y0;
+	c906l_post(&j);
 }
 
 // ---------------------------------------------------------------------------
@@ -959,6 +1188,111 @@ static int h264_pump(struct h264 *s, size_t *bytes_out, int *frames_out)
 // ---------------------------------------------------------------------------
 // Video thread.
 
+struct vstat {
+	double last_emit, enc_ms;
+	int frames;
+	size_t bytes;
+};
+
+// Queues a picture for the viewers and accounts for it.
+static void emit(struct vstat *s, struct msg *m, double t0)
+{
+	if (!m)
+		return;
+	atomic_store(&want_frame, 0);
+	s->bytes += m->len;
+	s->frames++;
+	s->last_emit = t0;
+	double dt = (now() - t0) * 1000;
+	s->enc_ms = s->enc_ms ? s->enc_ms * 0.8 + dt * 0.2 : dt;
+	post(m);
+}
+
+// The C906L's share of a band's rows. It encodes its part while this core
+// encodes the rest and then goes on to the next frame; the share grows
+// while its band is done by the time the next one is due, and shrinks
+// when this core has to wait for it.
+static double c906l_share = 0.4;
+
+// Sends the C906L's finished band. `wait`: the next band is due, so wait
+// for it (pictures go out in order); else only take a band already done.
+static void c906l_collect(struct vstat *vs, int wait)
+{
+	if (!c906l.active || (!wait && !c906l_done()))
+		return;
+	double t = now();
+	if (c906l_wait() < 0) {
+		atomic_store(&want_key, 1); // its rows never arrive: resend all
+		return;
+	}
+	// Done before its successor was due: give it more; waited for: less.
+	c906l_share *= wait && now() - t > 0.001 ? 0.95 : 1.03;
+	c906l_share = c906l_share < 0.1 ? 0.1 : c906l_share > 0.9 ? 0.9 : c906l_share;
+	struct msg *m = c906l_message();
+	if (m) {
+		vs->bytes += m->len;
+		post(m);
+	}
+}
+
+// On reconfiguring: wait out the band in flight and drop it.
+static void c906l_drain(void)
+{
+	if (c906l.active)
+		c906l_wait();
+}
+
+// Rows [y0, y1) of the dirty tile rows, which are then clean.
+static void tiles_take_rows(struct tiles *t, int *y0, int *y1)
+{
+	int r0 = t->th, r1 = -1;
+	for (int ty = 0; ty < t->th; ty++)
+		for (int tx = 0; tx < t->tw; tx++)
+			if (t->dirty[ty * t->tw + tx]) {
+				r0 = ty < r0 ? ty : r0;
+				r1 = ty;
+				break;
+			}
+	memset(t->dirty, 0, (size_t)t->tw * t->th);
+	t->any_dirty = 0;
+	*y0 = r0 * TILE;
+	*y1 = (r1 + 1) * TILE < t->h ? (r1 + 1) * TILE : t->h;
+}
+
+// This core's JPEG of source rows [y0, y1): from the VPSS's half-size NV12
+// when there is one, else from the reference frame.
+static struct msg *jpeg_band(struct planes *pl, const struct tiles *t, const uint8_t *nv12, int nv12_stride,
+			     int half, int y0, int y1)
+{
+	if (nv12)
+		nv12_planes(pl, nv12, t->w / 2, t->h / 2, nv12_stride, y0 / 2, y1 / 2);
+	else
+		uyvy_planes(pl, t->ref + (size_t)y0 * t->w * 2, t->w, y1 - y0, half);
+	return half ? jpeg_message(pl, jpeg_quality, t->w / 2, t->h / 2, y0 / 2)
+		    : jpeg_message(pl, jpeg_quality, t->w, t->h, y0);
+}
+
+// Sends source rows [y0, y1) as JPEG. With the C906L up, it takes the
+// bottom part, which goes out when done (c906l_collect), and this core
+// encodes the top.
+static void mjpeg_send(struct vstat *vs, double t0, struct planes *pl, const struct tiles *t, const uint8_t *frame,
+		       int stride, const uint8_t *nv12, int nv12_stride, int half, int y0, int y1)
+{
+	const int mcu = half ? 32 : 16; // source rows per JPEG MCU row
+	int split = y1;
+	c906l_collect(vs, 1);
+	if (c906l.ready && (size_t)t->w * t->h * 2 <= C906L_INPUT_SIZE && y1 - y0 >= 2 * mcu) {
+		split = y0 + (int)((y1 - y0) * (1 - c906l_share)) / mcu * mcu;
+		if (split < y0 + mcu)
+			split = y0 + mcu;
+		if (split >= y1)
+			split = y0 + (y1 - y0 - 1) / mcu * mcu;
+		c906l_submit(frame, stride, t->w, t->h, split, y1, half);
+	}
+	emit(vs, jpeg_band(pl, t, nv12, nv12_stride, half, y0, split), t0);
+	c906l_collect(vs, 0);
+}
+
 static void *video_main(void *arg)
 {
 	(void)arg;
@@ -968,9 +1302,8 @@ static void *video_main(void *arg)
 	struct h264 hs = { .fd = -1 };
 	struct planes pl = { 0 };
 	int mode = -1, sw = 0, sh = 0;
-	double last_emit = 0, stat_t = now(), enc_ms = 0;
-	int frames = 0;
-	size_t bytes = 0;
+	double stat_t = now();
+	struct vstat vs = { 0 };
 	int vpss_ok = 0;
 
 	for (;;) {
@@ -982,6 +1315,7 @@ static void *video_main(void *arg)
 		// is watching.
 		int running = cap.fd >= 0 || hs.fd >= 0;
 		if (running && (idle || !sig || want != mode || w != sw || h != sh)) {
+			c906l_drain();
 			capture_close(&cap);
 			vpss_close(&vp);
 			h264_stop(&hs);
@@ -1024,7 +1358,7 @@ static void *video_main(void *arg)
 
 		if (hs.fd >= 0) {
 			struct pollfd p = { .fd = hs.fd, .events = POLLIN };
-			if (poll(&p, 1, 1000) > 0 && h264_pump(&hs, &bytes, &frames) < 0) {
+			if (poll(&p, 1, 1000) > 0 && h264_pump(&hs, &vs.bytes, &vs.frames) < 0) {
 				log("h264 bridge exited");
 				h264_stop(&hs);
 				sleep(1);
@@ -1032,6 +1366,7 @@ static void *video_main(void *arg)
 		} else if (cap.fd >= 0) {
 			struct pollfd p = { .fd = cap.fd, .events = POLLIN };
 			if (poll(&p, 1, 1000) <= 0) {
+				c906l_drain();
 				capture_close(&cap); // signal lost or stalled; re-probe
 				vpss_close(&vp);
 				continue;
@@ -1041,38 +1376,27 @@ static void *video_main(void *arg)
 			if (capture_dq(&cap, &b) < 0)
 				continue;
 			double t0 = now();
+			c906l_collect(&vs, 0);
 			int key = atomic_exchange(&want_key, 0);
 			if (key) {
 				memset(tl.dirty, 1, (size_t)tl.tw * tl.th);
 				tl.any_dirty = 1;
 			}
 			const uint8_t *frame = cap.mem[b.index];
-			if (!(b.flags & V4L2_BUF_FLAG_ERROR) && t0 - last_emit >= 1.0 / max_fps &&
+			if (!(b.flags & V4L2_BUF_FLAG_ERROR) && t0 - vs.last_emit >= 1.0 / max_fps &&
 			    atomic_load(&want_frame)) {
 				tiles_update(&tl, frame, cap.stride);
-				struct msg *m = NULL;
-				if (tl.any_dirty) {
-					if (mode == MODE_TILES)
-						m = tiles_message(&tl);
-					else {
-						if (mode == MODE_MJPEG_HALF && vpss_ok && vpss_run(&vp, &cap, (int)b.index) == 0) {
-							nv12_planes(&pl, vp.mem, vp.w, vp.h, vp.stride);
-							vpss_done(&vp);
-						} else
-							uyvy_planes(&pl, tl.ref, tl.w, tl.h, mode == MODE_MJPEG_HALF);
-						m = jpeg_message(&pl, jpeg_quality);
-						memset(tl.dirty, 0, (size_t)tl.tw * tl.th);
-						tl.any_dirty = 0;
-					}
-				}
-				if (m) {
-					atomic_store(&want_frame, 0);
-					bytes += m->len;
-					frames++;
-					last_emit = t0;
-					double dt = (now() - t0) * 1000;
-					enc_ms = enc_ms ? enc_ms * 0.8 + dt * 0.2 : dt;
-					post(m);
+				if (tl.any_dirty && mode == MODE_TILES)
+					emit(&vs, tiles_message(&tl), t0);
+				else if (tl.any_dirty) {
+					int y0, y1, half = mode == MODE_MJPEG_HALF;
+					tiles_take_rows(&tl, &y0, &y1);
+					const uint8_t *nv12 = NULL;
+					if (half && vpss_ok && vpss_run(&vp, &cap, (int)b.index) == 0)
+						nv12 = vp.mem;
+					mjpeg_send(&vs, t0, &pl, &tl, frame, cap.stride, nv12, vp.stride, half, y0, y1);
+					if (nv12)
+						vpss_done(&vp);
 				}
 			}
 			capture_q(&cap, &b);
@@ -1080,9 +1404,9 @@ static void *video_main(void *arg)
 
 		double t = now();
 		if (t - stat_t >= 1) {
-			set_video_status(1, sw, sh, frames / (t - stat_t), bytes * 8 / 1000.0 / (t - stat_t), enc_ms);
-			frames = 0;
-			bytes = 0;
+			set_video_status(1, sw, sh, vs.frames / (t - stat_t), vs.bytes * 8 / 1000.0 / (t - stat_t), vs.enc_ms);
+			vs.frames = 0;
+			vs.bytes = 0;
 			stat_t = t;
 		}
 	}
@@ -1556,9 +1880,9 @@ static void status_json(char *out, size_t len)
 	pthread_mutex_lock(&st_lock);
 	snprintf(out, len,
 		 "{\"t\":\"status\",\"mode\":\"%s\",\"modes\":[%s],%s,\"usb\":\"%s\",\"power_led\":%d,"
-		 "\"leds\":%d,\"viewers\":%d}",
+		 "\"leds\":%d,\"viewers\":%d,\"c906l\":%s}",
 		 mode_names[atomic_load(&want_mode)], modes, video_status, usb_state(), atx_power_led(),
-		 kbd_leds, atomic_load(&n_viewers));
+		 kbd_leds, atomic_load(&n_viewers), c906l.ready ? "true" : "false");
 	pthread_mutex_unlock(&st_lock);
 }
 
@@ -1757,11 +2081,11 @@ static void bench_encoders(struct tiles *tl, struct planes *pl, int n, const cha
 	printf("  %-28s %7.1f ms  %8zu bytes\n", "tiles, whole picture", t, bench_bytes);
 	t = TIME(n, uyvy_planes(pl, tl->ref, tl->w, tl->h, 0));
 	printf("  %-28s %7.1f ms\n", "UYVY -> planar 4:2:2", t);
-	t = TIME(n, bench_take(jpeg_message(pl, jpeg_quality)));
+	t = TIME(n, bench_take(jpeg_message(pl, jpeg_quality, pl->w, pl->h, 0)));
 	printf("  %-28s %7.1f ms  %8zu bytes\n", "JPEG full size", t, bench_bytes);
 	t = TIME(n, uyvy_planes(pl, tl->ref, tl->w, tl->h, 1));
 	printf("  %-28s %7.1f ms\n", "UYVY -> planar 4:2:0, half", t);
-	t = TIME(n, bench_take(jpeg_message(pl, jpeg_quality)));
+	t = TIME(n, bench_take(jpeg_message(pl, jpeg_quality, pl->w, pl->h, 0)));
 	printf("  %-28s %7.1f ms  %8zu bytes\n", "JPEG half size", t, bench_bytes);
 }
 
@@ -1834,9 +2158,9 @@ static int bench(int n)
 				ok = 0;
 			} else {
 				double t1 = now();
-				nv12_planes(&pl, vp.mem, vp.w, vp.h, vp.stride);
+				nv12_planes(&pl, vp.mem, vp.w, vp.h, vp.stride, 0, vp.h);
 				vpss_done(&vp);
-				bench_take(jpeg_message(&pl, jpeg_quality));
+				bench_take(jpeg_message(&pl, jpeg_quality, pl.w, pl.h, 0));
 				scale_ms += (t1 - t0) * 1000;
 				total_ms += (now() - t0) * 1000;
 			}
@@ -1861,7 +2185,7 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--mode tiles|mjpeg|mjpeg-half|h264]\n"
-		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH]\n"
+		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH] [--c906l FIRMWARE]\n"
 		"       nanokvm-kvm --bench [FRAMES]\n");
 	exit(2);
 }
@@ -1886,6 +2210,8 @@ int main(int argc, char **argv)
 			max_fps = atoi(v) > 0 ? atoi(v) : 30;
 		else if (!strcmp(a, "--h264-bridge"))
 			h264_bridge = v;
+		else if (!strcmp(a, "--c906l"))
+			c906l_firmware = v;
 		else if (!strcmp(a, "--mode")) {
 			int found = 0;
 			for (int m = 0; m < MODE_COUNT; m++)
@@ -1914,6 +2240,9 @@ int main(int argc, char **argv)
 	gadget_setup();
 	hid_open();
 	log("listening on %s port %d", addr, port);
+
+	if (c906l_firmware && c906l_start() < 0)
+		log("c906l: offload off; compressing on this core");
 
 	pthread_t vt;
 	pthread_create(&vt, NULL, video_main, NULL);

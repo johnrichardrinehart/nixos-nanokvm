@@ -28,6 +28,10 @@ let
   ++ lib.optionals h264 [
     "--h264-bridge"
     (lib.getExe' pkgs.sg2002-h264-bridge "sg2002-h264-bridge")
+  ]
+  ++ lib.optionals cfg.c906l.enable [
+    "--c906l"
+    "${pkgs.callPackage ../pkgs/nanokvm-kvm/c906l { }}/firmware.bin"
   ];
 in
 {
@@ -67,6 +71,15 @@ in
       type = lib.types.ints.between 1 60;
       default = 30;
     };
+    c906l.enable =
+      lib.mkEnableOption ''
+        compression on the 700 MHz C906L: it LZ4-compresses tiles in tiles
+        mode and JPEG-encodes frames in the MJPEG modes, while this core
+        captures and compares the next frame. Off or failing, the main core
+        does it''
+      // {
+        default = true;
+      };
   };
 
   config = lib.mkIf cfg.enable {

@@ -24,6 +24,9 @@ let
     (toString cfg.jpegQuality)
     "--max-fps"
     (toString cfg.maxFps)
+    # Which ATX lines are wired, set in the UI; kept across reboots.
+    "--atx-config"
+    "/state/nanokvm-kvm-atx"
   ]
   ++ lib.optionals h264 [
     "--h264-bridge"
@@ -73,10 +76,9 @@ in
     };
     c906l.enable =
       lib.mkEnableOption ''
-        compression on the 700 MHz C906L: it LZ4-compresses tiles in tiles
-        mode and JPEG-encodes frames in the MJPEG modes, while this core
-        captures and compares the next frame. Off or failing, the main core
-        does it''
+        MJPEG encoding shared with the 700 MHz C906L: it encodes the bottom
+        part of each changed band while this core encodes the top. Off or
+        failing, the main core does it all''
       // {
         default = true;
       };

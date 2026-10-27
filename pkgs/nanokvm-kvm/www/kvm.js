@@ -17,8 +17,20 @@ function resize(w, h) {
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
+    fit();
   }
 }
+
+// Display size: the largest box of the picture's aspect inside <main> less
+// a 10 px margin each side, larger or smaller than the picture, on every
+// window or header change.
+function fit() {
+  const m = canvas.parentElement.getBoundingClientRect();
+  const k = Math.max(0, Math.min((m.width - 20) / canvas.width, (m.height - 20) / canvas.height));
+  canvas.style.width = `${Math.floor(canvas.width * k)}px`;
+  canvas.style.height = `${Math.floor(canvas.height * k)}px`;
+}
+new ResizeObserver(fit).observe(canvas.parentElement);
 
 // --- Video ---------------------------------------------------------------
 
@@ -157,6 +169,13 @@ function onStatus(s) {
   $("usb").classList.toggle("on", s.usb === "configured");
   $("caps").classList.toggle("on", (s.leds & 2) !== 0);
   $("led").classList.toggle("on", s.power_led === 1);
+  // ATX controls only for the lines marked wired (ATX… menu).
+  const atx = s.atx || {};
+  $("power").hidden = $("powerlong").hidden = !atx.power;
+  $("reset").hidden = !atx.reset;
+  $("led").hidden = !atx.led;
+  for (const box of document.querySelectorAll("#atxpanel input"))
+    if (document.activeElement !== box) box.checked = !!atx[box.dataset.line];
   if (modeChanged) send("key");
 }
 
@@ -307,6 +326,19 @@ canvas.addEventListener("wheel", (e) => {
 $("power").onclick = () => send("atx power 800");
 $("powerlong").onclick = () => { if (confirm("Hold the target's power button for 5 seconds?")) send("atx power 5000"); };
 $("reset").onclick = () => { if (confirm("Press the target's reset button?")) send("atx reset 800"); };
+$("atx").onclick = () => {
+  const p = $("atxpanel");
+  p.hidden = !p.hidden;
+  // Open toward the wider side: the header wraps, so the button can be anywhere.
+  const left = $("atx").getBoundingClientRect().left < innerWidth / 2;
+  p.style.left = left ? "0" : "auto";
+  p.style.right = left ? "auto" : "0";
+};
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".atx-menu")) $("atxpanel").hidden = true;
+});
+for (const box of document.querySelectorAll("#atxpanel input"))
+  box.onchange = () => send(`atx-wired ${box.dataset.line} ${box.checked ? 1 : 0}`);
 $("full").onclick = async () => {
   await document.documentElement.requestFullscreen();
   if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock().catch(() => {});

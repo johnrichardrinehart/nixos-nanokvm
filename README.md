@@ -233,7 +233,15 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
 - Keyboard (USB boot keyboard; Caps Lock state from the target) and an
   absolute pointer (USB HID gadget on the HID USB-C port), paste as typed
   text (US layout), Ctrl+Alt+Del, full screen with keyboard lock.
-- ATX: power (short press, 5 s force off), reset, power LED.
+- ATX: power (short press, 5 s force off), reset, power LED. The NanoKVM
+  cannot tell which header lines are wired (the buttons are outputs; an
+  unwired LED input floats), so each control appears only after it is
+  ticked in the UI's ATX… menu, kept in `/state/nanokvm-kvm-atx`; the
+  server ignores presses on lines not ticked.
+- Cabling (NanoKVM Full): the target's USB goes to the USB-C port next to
+  HDMI on the side of the case's dark end (PC-USB); the other USB-C beside
+  HDMI (AUX) is power only; the KVM-B board goes to the USB-C beside
+  Ethernet.
 
 Measured on the board with a 1080p desktop: frame rates in a browser while
 the cursor moves, and when every picture is redrawn whole (a viewer asking

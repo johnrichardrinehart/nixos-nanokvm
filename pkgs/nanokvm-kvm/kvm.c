@@ -1629,6 +1629,46 @@ static int atx_buttons = -1, atx_led = -1;
 static int atx_release_line = -1;
 static double atx_release_at;
 
+// Which ATX lines are wired, as set in the UI: nothing on the NanoKVM can
+// tell (the buttons are outputs, and an unwired LED input floats). Kept in
+// --atx-config as "power reset led", each 0 or 1; all off until set.
+enum { ATX_POWER, ATX_RESET, ATX_LED, ATX_LINES };
+static const char *atx_names[ATX_LINES] = { "power", "reset", "led" };
+static const char *atx_config;
+static int atx_wired[ATX_LINES];
+
+static void atx_load(void)
+{
+	FILE *f = atx_config ? fopen(atx_config, "r") : NULL;
+	if (!f)
+		return;
+	int v[ATX_LINES];
+	if (fscanf(f, "%d %d %d", &v[0], &v[1], &v[2]) == 3)
+		for (int i = 0; i < ATX_LINES; i++)
+			atx_wired[i] = v[i] != 0;
+	fclose(f);
+}
+
+// Written to a temporary file and renamed, so a power cut leaves the old
+// settings or the new ones.
+static void atx_save(void)
+{
+	if (!atx_config)
+		return;
+	char tmp[512];
+	snprintf(tmp, sizeof tmp, "%s.tmp", atx_config);
+	FILE *f = fopen(tmp, "w");
+	if (!f) {
+		log("ATX: %s: %s", tmp, strerror(errno));
+		return;
+	}
+	fprintf(f, "%d %d %d\n", atx_wired[0], atx_wired[1], atx_wired[2]);
+	if (fflush(f) == 0 && fsync(fileno(f)) == 0 && fclose(f) == 0)
+		rename(tmp, atx_config);
+	else
+		log("ATX: cannot write %s", tmp);
+}
+
 static int gpio_chip_by_label(const char *label)
 {
 	for (int i = 0; i < 16; i++) {
@@ -1686,7 +1726,7 @@ static void atx_press(int line, int ms)
 
 static int atx_power_led(void)
 {
-	if (atx_led < 0)
+	if (atx_led < 0 || !atx_wired[ATX_LED])
 		return -1;
 	struct gpio_v2_line_values v = { .mask = 1 };
 	if (xioctl(atx_led, GPIO_V2_LINE_GET_VALUES_IOCTL, &v) < 0)
@@ -1880,8 +1920,10 @@ static void status_json(char *out, size_t len)
 	pthread_mutex_lock(&st_lock);
 	snprintf(out, len,
 		 "{\"t\":\"status\",\"mode\":\"%s\",\"modes\":[%s],%s,\"usb\":\"%s\",\"power_led\":%d,"
+		 "\"atx\":{\"power\":%d,\"reset\":%d,\"led\":%d},"
 		 "\"leds\":%d,\"viewers\":%d,\"c906l\":%s}",
 		 mode_names[atomic_load(&want_mode)], modes, video_status, usb_state(), atx_power_led(),
+		 atx_wired[ATX_POWER], atx_wired[ATX_RESET], atx_wired[ATX_LED],
 		 kbd_leds, atomic_load(&n_viewers), c906l.ready ? "true" : "false");
 	pthread_mutex_unlock(&st_lock);
 }
@@ -1892,7 +1934,8 @@ static void status_json(char *out, size_t len)
 //   r                   release every key
 //   mode NAME           switch the video mode for everyone
 //   key                 request a full picture
-//   atx power|reset MS  hold an ATX button for MS milliseconds
+//   atx power|reset MS  hold an ATX button for MS milliseconds (if wired)
+//   atx-wired LINE 0|1  mark power, reset or led as wired or not
 static void ws_command(struct client *c, char *s)
 {
 	int a, b, d, e;
@@ -1910,10 +1953,16 @@ static void ws_command(struct client *c, char *s)
 	} else if (!strcmp(s, "key")) {
 		atomic_store(&want_key, 1);
 		c->need_key = 1;
+	} else if (sscanf(s, "atx-wired %15s %d", word, &a) == 2) {
+		for (int i = 0; i < ATX_LINES; i++)
+			if (!strcmp(word, atx_names[i]) && atx_wired[i] != (a != 0)) {
+				atx_wired[i] = a != 0;
+				atx_save();
+			}
 	} else if (sscanf(s, "atx %15s %d", word, &a) == 2 && a > 0 && a <= 10000) {
-		if (!strcmp(word, "power"))
+		if (!strcmp(word, "power") && atx_wired[ATX_POWER])
 			atx_press(23, a);
-		else if (!strcmp(word, "reset"))
+		else if (!strcmp(word, "reset") && atx_wired[ATX_RESET])
 			atx_press(25, a);
 	}
 }
@@ -2186,6 +2235,7 @@ static void usage(void)
 	fprintf(stderr,
 		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--mode tiles|mjpeg|mjpeg-half|h264]\n"
 		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH] [--c906l FIRMWARE]\n"
+		"                   [--atx-config FILE]\n"
 		"       nanokvm-kvm --bench [FRAMES]\n");
 	exit(2);
 }
@@ -2202,6 +2252,8 @@ int main(int argc, char **argv)
 			usage();
 		if (!strcmp(a, "--listen"))
 			addr = v;
+		else if (!strcmp(a, "--atx-config"))
+			atx_config = v;
 		else if (!strcmp(a, "--port"))
 			port = atoi(v);
 		else if (!strcmp(a, "--quality"))
@@ -2228,6 +2280,7 @@ int main(int argc, char **argv)
 	if (atomic_load(&want_mode) == MODE_H264 && !h264_bridge)
 		atomic_store(&want_mode, MODE_TILES);
 	signal(SIGPIPE, SIG_IGN);
+	atx_load();
 	openlog("nanokvm-kvm", LOG_PID, LOG_DAEMON);
 
 	int lfd = listen_on(addr, port);

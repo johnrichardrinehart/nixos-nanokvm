@@ -231,9 +231,11 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
 - Video from the HDMI input (LT6911 bridge, 1080p UYVY), in the mode chosen
   in the UI (`nanokvm.kvm.mode` sets the default).
 - Keyboard (USB boot keyboard; Caps Lock follows this computer's) and an
-  absolute pointer (USB HID gadget on the HID USB-C port), paste as typed
-  text (US layout), Ctrl+Alt+Del. The gadget can wake a host that
-  suspended the USB link (remote wakeup; a dwc2 kernel patch adds it).
+  absolute pointer (USB HID gadget on the HID USB-C port), Ctrl+Alt+Del.
+  ⌘V (Ctrl+V off macOS) on the picture types this computer's clipboard
+  into the target (US layout) without showing it; empty, non-text and
+  binary clipboards are flagged and not typed. The gadget can wake a host
+  that suspended the USB link (remote wakeup; a dwc2 kernel patch adds it).
 - ATX: power (short press, 5 s force off), reset, power LED. The NanoKVM
   cannot tell which header lines are wired (the buttons are outputs; an
   unwired LED input floats), so each control appears only after it is

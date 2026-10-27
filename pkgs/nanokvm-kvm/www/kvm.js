@@ -165,7 +165,7 @@ function onStatus(s) {
   $("stats").textContent = s.signal
     ? `${s.width}×${s.height} · ${s.fps.toFixed(1)} fps · ${(s.kbps / 1000).toFixed(1)} Mbit/s · ${s.encode_ms.toFixed(0)} ms/frame`
     : "";
-  overlay.textContent = s.signal ? "" : "No HDMI signal";
+  if (!note.until || performance.now() > note.until) overlay.textContent = s.signal ? "" : "No HDMI signal";
   $("usb").classList.toggle("on", s.usb === "configured");
   $("caps").classList.toggle("on", (s.leds & 2) !== 0);
   $("led").classList.toggle("on", s.power_led === 1);
@@ -239,7 +239,20 @@ function syncCaps(e) {
   send(`k ${usage.CapsLock} 0`);
 }
 
+const isMac = /Mac/.test(navigator.platform);
+$("pastehint").textContent = isMac ? "⌘V pastes" : "Ctrl+V pastes";
+
 function key(e, down) {
+  // ⌘V (Ctrl+V elsewhere) pastes this computer's clipboard instead: let
+  // the browser's paste reach the hidden box (pasteBox below).
+  if (down && e.code === "KeyV" && (isMac ? e.metaKey : e.ctrlKey) && !e.altKey) {
+    // The modifier is already down on the target. Tap F24 under it so
+    // that releasing it does not open the Start menu, then release all.
+    tap(usage.F24);
+    send("r");
+    pasteBox.focus();
+    return;
+  }
   const u = usage[e.code];
   if (u === undefined) return;
   e.preventDefault();
@@ -275,26 +288,49 @@ function charKeys(c) {
   if (i >= 0) return [true, codes[i]];
   return null;
 }
-// Types this computer's clipboard into the target as is, never showing it
-// (it is often a secret). The browser may ask once for clipboard access.
-$("paste").onclick = async () => {
-  let text;
-  try { text = await navigator.clipboard.readText(); } catch {
-    overlay.textContent = "The browser did not allow reading the clipboard";
-    setTimeout(() => { if (status.signal) overlay.textContent = ""; }, 3000);
-    return;
-  }
-  // Caps Lock on the target inverts letters: shift them the other way.
+// A short message over the picture, kept for 3 s.
+function note(text) {
+  overlay.textContent = text;
+  note.until = performance.now() + 3000;
+  clearTimeout(note.timer);
+  note.timer = setTimeout(() => { overlay.textContent = status.signal ? "" : "No HDMI signal"; }, 3000);
+}
+
+// Types clipboard text into the target, never showing it (it is often a
+// secret). Caps Lock on the target inverts letters: shift them the other way.
+function typeText(text) {
+  if (/[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text)) return note("The clipboard holds binary data; nothing typed");
   const caps = (status.leds & 2) !== 0;
-  for (const c of text.replace(/\r\n/g, "\n")) {
+  let typed = 0, skipped = 0;
+  for (const c of text.replace(/\r\n?/g, "\n")) {
     const k = charKeys(c);
-    if (!k) continue;
+    if (!k) { skipped++; continue; }
     const letter = c.toLowerCase() !== c.toUpperCase();
     if (k[0] !== (caps && letter)) tap(0xe1, k[1]);
     else tap(k[1]);
+    typed++;
   }
+  note(skipped ? `Typed ${typed} characters; skipped ${skipped} a US keyboard cannot type` : `Typed ${typed} characters`);
+}
+
+// The paste lands here: a focused text box gets the clipboard on ⌘V with no
+// browser prompt, where a button reading the clipboard gets one in Safari.
+const pasteBox = document.createElement("textarea");
+pasteBox.setAttribute("aria-hidden", "true");
+pasteBox.tabIndex = -1;
+pasteBox.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+document.body.append(pasteBox);
+pasteBox.addEventListener("paste", (e) => {
+  e.preventDefault();
+  const d = e.clipboardData;
+  const text = d ? d.getData("text/plain") : "";
   canvas.focus();
-};
+  if (text) return typeText(text);
+  note(d && d.types.length ? "The clipboard holds no text (an image or file?); nothing typed" : "The clipboard is empty");
+});
+// Not pasted (the browser refused): back to the picture.
+pasteBox.addEventListener("blur", () => { pasteBox.value = ""; });
+pasteBox.addEventListener("keyup", () => canvas.focus());
 
 // --- Pointer -------------------------------------------------------------
 

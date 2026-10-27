@@ -275,15 +275,22 @@ function charKeys(c) {
   if (i >= 0) return [true, codes[i]];
   return null;
 }
+// Types this computer's clipboard into the target as is, never showing it
+// (it is often a secret). The browser may ask once for clipboard access.
 $("paste").onclick = async () => {
-  let text = "";
-  try { text = await navigator.clipboard.readText(); } catch { /* not allowed */ }
-  text = prompt("Text to type into the target (US layout):", text);
-  if (!text) return;
+  let text;
+  try { text = await navigator.clipboard.readText(); } catch {
+    overlay.textContent = "The browser did not allow reading the clipboard";
+    setTimeout(() => { if (status.signal) overlay.textContent = ""; }, 3000);
+    return;
+  }
+  // Caps Lock on the target inverts letters: shift them the other way.
+  const caps = (status.leds & 2) !== 0;
   for (const c of text.replace(/\r\n/g, "\n")) {
     const k = charKeys(c);
     if (!k) continue;
-    if (k[0]) tap(0xe1, k[1]);
+    const letter = c.toLowerCase() !== c.toUpperCase();
+    if (k[0] !== (caps && letter)) tap(0xe1, k[1]);
     else tap(k[1]);
   }
   canvas.focus();
@@ -338,7 +345,7 @@ canvas.addEventListener("wheel", (e) => {
   wheel += e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0;
 }, { passive: false });
 
-// --- ATX and full screen ------------------------------------------------
+// --- ATX ------------------------------------------------------------------
 
 // Press lengths as in Sipeed's UI: 800 ms short, 5 s to force off.
 $("power").onclick = () => send("atx power 800");
@@ -357,11 +364,6 @@ document.addEventListener("click", (e) => {
 });
 for (const box of document.querySelectorAll("#atxpanel input"))
   box.onchange = () => send(`atx-wired ${box.dataset.line} ${box.checked ? 1 : 0}`);
-$("full").onclick = async () => {
-  await document.documentElement.requestFullscreen();
-  if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock().catch(() => {});
-  canvas.focus();
-};
 
 connect();
 canvas.focus();

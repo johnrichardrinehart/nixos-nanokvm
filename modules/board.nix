@@ -116,6 +116,14 @@ let
               codaFirmware = if cfg.h264Encoder.enable then boardPkgs.sg2002-coda980-firmware else null;
             };
             ignoreConfigErrors = false;
+            # The USB controller's gadget driver cannot wake a suspended
+            # host; the HID keyboard and mouse need it (pkgs/nanokvm-kvm).
+            kernelPatches = (args.kernelPatches or [ ]) ++ [
+              {
+                name = "dwc2-gadget-remote-wakeup";
+                patch = ../patches/linux-7.3-dwc2-gadget-remote-wakeup.patch;
+              }
+            ];
           }
         )
       ) { };

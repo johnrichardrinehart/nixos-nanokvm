@@ -230,9 +230,10 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
 
 - Video from the HDMI input (LT6911 bridge, 1080p UYVY), in the mode chosen
   in the UI (`nanokvm.kvm.mode` sets the default).
-- Keyboard (USB boot keyboard; Caps Lock state from the target) and an
+- Keyboard (USB boot keyboard; Caps Lock follows this computer's) and an
   absolute pointer (USB HID gadget on the HID USB-C port), paste as typed
-  text (US layout), Ctrl+Alt+Del, full screen with keyboard lock.
+  text (US layout), Ctrl+Alt+Del. The gadget can wake a host that
+  suspended the USB link (remote wakeup; a dwc2 kernel patch adds it).
 - ATX: power (short press, 5 s force off), reset, power LED. The NanoKVM
   cannot tell which header lines are wired (the buttons are outputs; an
   unwired LED input floats), so each control appears only after it is
@@ -256,6 +257,12 @@ for a key frame every 30 ms):
 
 `nanokvm-kvm --bench` prints the CPU figures for the current picture.
 
+- Tiles are 32×32 (`--tile N`, 8 to 128 in steps of 8). Opening Edge,
+  scrolling it and closing it over the SSH tunnel, 8 px tiles took
+  175 ms of CPU a frame and 128 px tiles sent more data; 16 to 64 px
+  stayed within run-to-run noise of each other (2–5 fps, 5.5–10 MB). The
+  limit is the one CPU core, which both compresses and encrypts SSH
+  (alone it pushes about 30 Mbit/s through SSH), not the tile size.
 - The MJPEG modes send only the band of rows holding changed tiles, as a
   JPEG drawn at its row. With `nanokvm.kvm.c906l.enable`, the SoC's 700 MHz
   C906L encodes the bottom part of each band while the main core encodes

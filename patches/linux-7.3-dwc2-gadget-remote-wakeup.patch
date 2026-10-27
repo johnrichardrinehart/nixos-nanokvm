@@ -1,0 +1,61 @@
+From: John Rinehart <johnrichardrinehart@gmail.com>
+Subject: [PATCH] usb: dwc2: gadget: support remote wakeup
+
+The dwc2 gadget has no usb_gadget_ops.wakeup, so usb_gadget_wakeup()
+does nothing. Once a host suspends the bus, a gadget cannot resume it,
+and a HID keyboard or mouse gadget loses all input until the host
+resumes on its own.
+
+When the host enabled remote wakeup and the bus is suspended, leave
+clock gating if the core is in it, drive resume signalling for 10 ms,
+and stop. Partial power down and hibernation are left out.
+
+---
+--- a/drivers/usb/dwc2/gadget.c	2026-10-27 14:17:29.614093036 -0400
++++ b/drivers/usb/dwc2/gadget.c	2026-10-27 14:17:29.621214728 -0400
+@@ -4793,8 +4793,45 @@
+ 	spin_unlock_irqrestore(&hsotg->lock, flags);
+ }
+ 
++/**
++ * dwc2_hsotg_wakeup - signal remote wakeup to a host that suspended the bus
++ * @gadget: The usb gadget state
++ *
++ * Drives resume signalling for 10 ms (USB 2.0 7.1.7.7: 1 to 15 ms) when the
++ * host enabled remote wakeup and the bus is suspended. A HID gadget, for
++ * one, cannot deliver input otherwise once the host suspends it.
++ */
++static int dwc2_hsotg_wakeup(struct usb_gadget *gadget)
++{
++	struct dwc2_hsotg *hsotg = to_hsotg(gadget);
++	unsigned long flags;
++
++	spin_lock_irqsave(&hsotg->lock, flags);
++	if (hsotg->lx_state != DWC2_L2 || !hsotg->remote_wakeup_allowed ||
++	    hsotg->in_ppd) {
++		int ret = hsotg->lx_state == DWC2_L2 ? -EINVAL : 0;
++
++		spin_unlock_irqrestore(&hsotg->lock, flags);
++		return ret;
++	}
++	if (hsotg->params.power_down == DWC2_POWER_DOWN_PARAM_NONE &&
++	    hsotg->bus_suspended && !hsotg->params.no_clock_gating)
++		/* Ungates the clocks, sets RMTWKUPSIG and moves to L0. */
++		dwc2_gadget_exit_clock_gating(hsotg, 1);
++	else {
++		dwc2_set_bit(hsotg, DCTL, DCTL_RMTWKUPSIG);
++		hsotg->lx_state = DWC2_L0;
++	}
++	spin_unlock_irqrestore(&hsotg->lock, flags);
++
++	mdelay(10);
++	dwc2_clear_bit(hsotg, DCTL, DCTL_RMTWKUPSIG);
++	return 0;
++}
++
+ static const struct usb_gadget_ops dwc2_hsotg_gadget_ops = {
+ 	.get_frame	= dwc2_hsotg_gadget_getframe,
++	.wakeup		= dwc2_hsotg_wakeup,
+ 	.set_selfpowered	= dwc2_hsotg_set_selfpowered,
+ 	.udc_start		= dwc2_hsotg_udc_start,
+ 	.udc_stop		= dwc2_hsotg_udc_stop,

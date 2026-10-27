@@ -576,7 +576,10 @@ static void vpss_done(struct vpss *v)
 // Encoders. `ref` is the last frame sent (a cached copy of the capture),
 // updated tile by tile; `dirty` marks tiles changed since the last message.
 
-#define TILE 32
+// Tile edge in pixels (--tile): a multiple of 8, so tile rows stay 8-byte
+// aligned for same(), and half-size MJPEG bands start on even rows.
+#define TILE_MAX 128
+static int tile_size = 32;
 
 struct tiles {
 	int w, h, tw, th; // frame size, tiles across/down
@@ -597,8 +600,8 @@ static int tiles_init(struct tiles *t, int w, int h)
 	tiles_free(t);
 	t->w = w;
 	t->h = h;
-	t->tw = (w + TILE - 1) / TILE;
-	t->th = (h + TILE - 1) / TILE;
+	t->tw = (w + tile_size - 1) / tile_size;
+	t->th = (h + tile_size - 1) / tile_size;
 	t->ref = calloc((size_t)w * h, 2);
 	t->dirty = malloc((size_t)t->tw * t->th);
 	if (!t->ref || !t->dirty)
@@ -609,8 +612,8 @@ static int tiles_init(struct tiles *t, int w, int h)
 }
 
 // musl's memcmp compares byte by byte. Tile rows start 8-byte aligned
-// (tiles are 32 pixels, 64 bytes, wide); only a frame's last, narrower
-// column can leave a tail.
+// (tiles are a multiple of 8 pixels, 16 bytes, wide); only a frame's last,
+// narrower column can leave a tail.
 static int same(const uint8_t *a, const uint8_t *b, size_t n)
 {
 	const uint64_t *x = (const uint64_t *)(const void *)a, *y = (const uint64_t *)(const void *)b;
@@ -631,9 +634,9 @@ static int tiles_update(struct tiles *t, const uint8_t *cap, int stride)
 	int changed = 0;
 	const size_t rb = (size_t)t->w * 2;
 	for (int ty = 0; ty < t->th; ty++) {
-		int y0 = ty * TILE, y1 = y0 + TILE < t->h ? y0 + TILE : t->h;
+		int y0 = ty * tile_size, y1 = y0 + tile_size < t->h ? y0 + tile_size : t->h;
 		for (int tx = 0; tx < t->tw; tx++) {
-			int x0 = tx * TILE, x1 = x0 + TILE < t->w ? x0 + TILE : t->w;
+			int x0 = tx * tile_size, x1 = x0 + tile_size < t->w ? x0 + tile_size : t->w;
 			size_t bytes = (size_t)(x1 - x0) * 2;
 			int y = y0;
 			for (; y < y1; y++)
@@ -664,7 +667,7 @@ static struct msg *tiles_message(struct tiles *t)
 		n += t->dirty[i];
 	if (!n)
 		return NULL;
-	const int raw = TILE * TILE * 2;
+	const int raw = tile_size * tile_size * 2;
 	size_t cap = 8 + (size_t)n * (12 + (size_t)LZ4_compressBound(raw));
 	struct msg *m = msg_new(cap);
 	if (!m)
@@ -675,16 +678,16 @@ static struct msg *tiles_message(struct tiles *t)
 	put16(p + 2, (unsigned)t->w);
 	put16(p + 4, (unsigned)t->h);
 	put16(p + 6, (unsigned)n);
-	static uint8_t buf[TILE * TILE * 2];
+	static uint8_t buf[TILE_MAX * TILE_MAX * 2];
 	const size_t rb = (size_t)t->w * 2;
 	for (int ty = 0; ty < t->th; ty++)
 		for (int tx = 0; tx < t->tw; tx++) {
 			if (!t->dirty[ty * t->tw + tx])
 				continue;
 			t->dirty[ty * t->tw + tx] = 0;
-			int x0 = tx * TILE, y0 = ty * TILE;
-			int w = x0 + TILE < t->w ? TILE : t->w - x0;
-			int h = y0 + TILE < t->h ? TILE : t->h - y0;
+			int x0 = tx * tile_size, y0 = ty * tile_size;
+			int w = x0 + tile_size < t->w ? tile_size : t->w - x0;
+			int h = y0 + tile_size < t->h ? tile_size : t->h - y0;
 			for (int y = 0; y < h; y++)
 				memcpy(buf + y * w * 2, t->ref + (y0 + y) * rb + x0 * 2, (size_t)w * 2);
 			int size = LZ4_compress_default((const char *)buf, (char *)o + 12, w * h * 2,
@@ -1255,8 +1258,8 @@ static void tiles_take_rows(struct tiles *t, int *y0, int *y1)
 			}
 	memset(t->dirty, 0, (size_t)t->tw * t->th);
 	t->any_dirty = 0;
-	*y0 = r0 * TILE;
-	*y1 = (r1 + 1) * TILE < t->h ? (r1 + 1) * TILE : t->h;
+	*y0 = r0 * tile_size;
+	*y1 = (r1 + 1) * tile_size < t->h ? (r1 + 1) * tile_size : t->h;
 }
 
 // This core's JPEG of source rows [y0, y1): from the VPSS's half-size NV12
@@ -1461,6 +1464,33 @@ static int put_file(const char *dir, const char *name, const void *data, size_t 
 }
 #define put_str(dir, name, s) put_file(dir, name, s, strlen(s))
 
+// Asks a host that suspended the link to resume (USB remote wakeup): the
+// UDC's "srp" file calls usb_gadget_wakeup(). At most once a second.
+static void udc_wakeup(void)
+{
+	static double asked;
+	double t = now();
+	if (t - asked < 1)
+		return;
+	asked = t;
+	DIR *d = opendir("/sys/class/udc");
+	struct dirent *e;
+	while (d && (e = readdir(d)))
+		if (e->d_name[0] != '.') {
+			char p[300];
+			snprintf(p, sizeof p, "/sys/class/udc/%s/srp", e->d_name);
+			int fd = open(p, O_WRONLY | O_CLOEXEC);
+			if (fd >= 0) {
+				if (write(fd, "1", 1) < 0) {
+				}
+				close(fd);
+			}
+			break;
+		}
+	if (d)
+		closedir(d);
+}
+
 static void gadget_setup(void)
 {
 	const char *g = "/sys/kernel/config/usb_gadget/nanokvm";
@@ -1479,6 +1509,9 @@ static void gadget_setup(void)
 	snprintf(p, sizeof p, "%s/configs/c.1", g);
 	mkdir(p, 0755);
 	put_str(p, "MaxPower", "100");
+	// Bus powered, remote wakeup: input can resume a host that suspended
+	// the link (needs the kernel's dwc2 remote-wakeup patch).
+	put_str(p, "bmAttributes", "0xa0");
 	snprintf(p, sizeof p, "%s/configs/c.1/strings/0x409", g);
 	mkdir(p, 0755);
 	put_str(p, "configuration", "HID");
@@ -1537,8 +1570,12 @@ static void hid_flush(void)
 	while (hid_qn) {
 		struct report *r = &hid_q[hid_qh];
 		ssize_t n = write(r->fd, r->data, r->len);
-		if (n < 0 && errno == EAGAIN)
+		if (n < 0 && errno == EAGAIN) {
+			// The host is not taking reports: it may have suspended
+			// the link.
+			udc_wakeup();
 			return;
+		}
 		if (n < 0 && errno != EINTR) {
 			// Host gone (ESHUTDOWN): drop what is queued.
 			hid_qn = 0;
@@ -2237,7 +2274,7 @@ static void usage(void)
 	fprintf(stderr,
 		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--mode tiles|mjpeg|mjpeg-half|h264]\n"
 		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH] [--c906l FIRMWARE]\n"
-		"                   [--atx-config FILE]\n"
+		"                   [--atx-config FILE] [--tile 8..128, multiple of 8]\n"
 		"       nanokvm-kvm --bench [FRAMES]\n");
 	exit(2);
 }
@@ -2266,7 +2303,11 @@ int main(int argc, char **argv)
 			h264_bridge = v;
 		else if (!strcmp(a, "--c906l"))
 			c906l_firmware = v;
-		else if (!strcmp(a, "--mode")) {
+		else if (!strcmp(a, "--tile")) {
+			tile_size = atoi(v);
+			if (tile_size < 8 || tile_size > TILE_MAX || tile_size % 8)
+				usage();
+		} else if (!strcmp(a, "--mode")) {
 			int found = 0;
 			for (int m = 0; m < MODE_COUNT; m++)
 				if (!strcmp(v, mode_names[m])) {

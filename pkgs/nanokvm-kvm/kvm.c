@@ -1707,6 +1707,8 @@ static void atx_open(void)
 	close(chip);
 }
 
+// `line` is the index in atx_open()'s request, which the line-values ioctl
+// takes, not the pad offset: ATX_POWER (A23) or ATX_RESET (A25).
 static void atx_set(int line, int on)
 {
 	if (atx_buttons < 0)
@@ -1961,9 +1963,9 @@ static void ws_command(struct client *c, char *s)
 			}
 	} else if (sscanf(s, "atx %15s %d", word, &a) == 2 && a > 0 && a <= 10000) {
 		if (!strcmp(word, "power") && atx_wired[ATX_POWER])
-			atx_press(23, a);
+			atx_press(ATX_POWER, a);
 		else if (!strcmp(word, "reset") && atx_wired[ATX_RESET])
-			atx_press(25, a);
+			atx_press(ATX_RESET, a);
 	}
 }
 

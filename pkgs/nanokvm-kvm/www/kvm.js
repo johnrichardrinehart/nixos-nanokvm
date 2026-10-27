@@ -223,19 +223,28 @@ for (let i = 13; i <= 24; i++) usage["F" + i] = 104 + i - 13;
 for (let i = 1; i <= 9; i++) usage["Numpad" + i] = 88 + i;
 usage.Numpad0 = 98;
 
-// macOS browsers report Caps Lock as one event per press: keydown when it
-// turns on, keyup when it turns off. Each is a whole press for the target.
-const capsPerEvent = /Mac/.test(navigator.platform);
+// Caps Lock follows this computer's state: on any Caps Lock event and
+// before any other key goes down, if the target's Caps Lock LED differs
+// from ours, tap it. The key's own events are never forwarded as such
+// (macOS browsers report one event per press), so the two cannot drift:
+// pages opened with Caps Lock on, or toggled without focus, catch up.
+let capsSentAt = 0;
+function syncCaps(e) {
+  const mine = e.getModifierState("CapsLock");
+  const theirs = (status.leds & 2) !== 0;
+  // The target's LED report lags a tap; don't tap twice meanwhile.
+  if (mine === theirs || performance.now() - capsSentAt < 500) return;
+  capsSentAt = performance.now();
+  send(`k ${usage.CapsLock} 1`);
+  send(`k ${usage.CapsLock} 0`);
+}
 
 function key(e, down) {
   const u = usage[e.code];
   if (u === undefined) return;
   e.preventDefault();
-  if (e.code === "CapsLock" && capsPerEvent) {
-    send(`k ${u} 1`);
-    send(`k ${u} 0`);
-    return;
-  }
+  if (e.code === "CapsLock") return syncCaps(e);
+  if (down) syncCaps(e);
   send(`k ${u} ${down ? 1 : 0}`);
 }
 canvas.addEventListener("keydown", (e) => key(e, true));

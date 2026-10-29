@@ -24,6 +24,14 @@ watchdog armed by the bootloader.
   is not listed as unused. Unused: audio (the microphone and codecs belong
   to the LicheeRV module; Sipeed's NanoKVM firmware ships no audio driver
   either), the ADC and PWM.
+- CD-ROM gadget size: upstream Linux cuts the backing file of a CD-ROM
+  mass-storage LUN (`lun.N/cdrom` = 1) at 2.36 GB, so a DVD ISO does not
+  boot. A kernel patch makes the limit the parameter
+  `usb_f_mass_storage.cdrom_max_bytes`. The default is 8547991552 bytes
+  (one single-sided dual-layer DVD+R). The value 0 removes the limit. Set
+  it on the kernel command line, with `modprobe`, or at run time in
+  `/sys/module/usb_f_mass_storage/parameters/cdrom_max_bytes`. A LUN reads
+  the value when it opens a file.
 - H.264: the Coda980 encoder needs Sipeed's proprietary firmware and is
   off by default. `nanokvm.h264Encoder.enable = true` builds the driver
   and the firmware into the kernel.

@@ -118,10 +118,16 @@ let
             ignoreConfigErrors = false;
             # The USB controller's gadget driver cannot wake a suspended
             # host; the HID keyboard and mouse need it (pkgs/nanokvm-kvm).
+            # A CD-ROM gadget LUN cuts files at 2.36 GB; the limit becomes
+            # usb_f_mass_storage.cdrom_max_bytes (default: one DVD+R DL).
             kernelPatches = (args.kernelPatches or [ ]) ++ [
               {
                 name = "dwc2-gadget-remote-wakeup";
                 patch = ../patches/linux-7.3-dwc2-gadget-remote-wakeup.patch;
+              }
+              {
+                name = "f_mass_storage-cdrom-max-bytes";
+                patch = ../patches/linux-7.3-f_mass_storage-cdrom-max-bytes.patch;
               }
             ];
           }

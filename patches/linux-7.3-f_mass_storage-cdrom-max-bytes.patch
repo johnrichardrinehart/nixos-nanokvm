@@ -1,0 +1,74 @@
+From: John Rinehart <johnrichardrinehart@gmail.com>
+Subject: [PATCH] usb: gadget: f_mass_storage: make the CD-ROM size limit a parameter
+
+A CD-ROM LUN cuts its backing file to 256*60*75 - 1 sectors (about
+2.36 GB), the largest address in Minutes-Seconds-Frames (MSF) form. A DVD
+image, for example a 6 GB Windows installer ISO, is then cut, and the host
+cannot boot it. Hosts read DVD-size media by LBA, which has no such limit.
+
+Add the module parameter cdrom_max_bytes. It sets the largest backing file
+in bytes that a CD-ROM LUN uses. The value 0 removes the limit. The
+default is the capacity of a single-sided dual-layer DVD+R (8547991552
+bytes). Set it on the kernel command line
+(usb_f_mass_storage.cdrom_max_bytes=N), with modprobe, or in
+/sys/module/usb_f_mass_storage/parameters/cdrom_max_bytes. A LUN reads it
+when it opens a backing file.
+
+An address that does not fit in MSF form is now reported as 255:59:74, the
+largest MSF address. Before, the minutes byte wrapped.
+
+---
+--- a/drivers/usb/gadget/function/storage_common.c	2026-10-29 16:30:37.354060126 -0400
++++ b/drivers/usb/gadget/function/storage_common.c	2026-10-29 16:30:56.150548124 -0400
+@@ -28,6 +28,20 @@
+ 
+ #include "storage_common.h"
+ 
++/*
++ * Largest backing file a CD-ROM LUN uses, in bytes; a larger file is cut to
++ * this size. 0 means no limit. The default is the capacity of a single-sided
++ * dual-layer DVD+R (4173824 sectors of 2048 bytes). It is read when a LUN
++ * opens its backing file, so a change applies to the next file opened.
++ */
++static unsigned long long cdrom_max_bytes = 4173824ULL * 2048;
++module_param(cdrom_max_bytes, ullong, 0644);
++MODULE_PARM_DESC(cdrom_max_bytes,
++		 "Largest CD-ROM backing file in bytes, larger files are cut (0: no limit)");
++
++/* Largest address that Minutes-Seconds-Frames can hold: 255:59:74. */
++#define FSG_MAX_MSF_ADDR	(256*60*75 - 1)
++
+ /* There is only one interface. */
+ 
+ struct usb_interface_descriptor fsg_intf_desc = {
+@@ -243,12 +257,14 @@
+ 	num_sectors = size >> blkbits; /* File size in logic-block-size blocks */
+ 	min_sectors = 1;
+ 	if (curlun->cdrom) {
++		unsigned long long max_bytes = READ_ONCE(cdrom_max_bytes);
++
+ 		min_sectors = 300;	/* Smallest track is 300 frames */
+-		if (num_sectors >= 256*60*75) {
+-			num_sectors = 256*60*75 - 1;
++		if (max_bytes && num_sectors > (loff_t)(max_bytes >> 11)) {
++			num_sectors = max_bytes >> 11;
+ 			LINFO(curlun, "file too big: %s\n", filename);
+-			LINFO(curlun, "using only first %d blocks\n",
+-					(int) num_sectors);
++			LINFO(curlun, "using only first %lld blocks\n",
++					(long long) num_sectors);
+ 		}
+ 	}
+ 	if (num_sectors < min_sectors) {
+@@ -299,6 +315,11 @@
+ 		 * Convert to Minutes-Seconds-Frames.
+ 		 * Sector size is already set to 2048 bytes.
+ 		 */
++		/*
++		 * Addresses past 255:59:74 do not fit; report the largest
++		 * one. Hosts address larger media by LBA.
++		 */
++		addr = min_t(u32, addr, FSG_MAX_MSF_ADDR - 2*75);
+ 		addr += 2*75;		/* Lead-in occupies 2 seconds */
+ 		dest[3] = addr % 75;	/* Frames */
+ 		addr /= 75;

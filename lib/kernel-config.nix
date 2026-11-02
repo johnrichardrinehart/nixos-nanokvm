@@ -154,6 +154,10 @@ with lib.kernel;
   RD_XZ = yes;
   BLK_DEV = yes;
   BLK_DEV_LOOP = yes;
+  # Network block devices: the USB mass-storage gadget can present an image
+  # that another machine serves (busybox nbd-client), so large media never
+  # touch the SD card.
+  BLK_DEV_NBD = yes;
   MISC_FILESYSTEMS = yes;
   EROFS_FS = yes;
   EROFS_FS_ZIP = yes;

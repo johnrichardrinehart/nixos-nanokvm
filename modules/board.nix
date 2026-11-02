@@ -190,17 +190,23 @@ let
     sg2002-opensbi-mainline = opensbi;
   };
 
+  # Flush the routes before the address is added: adding the address makes
+  # the kernel add the connected route, and the default route needs it.
   udhcpcScript = pkgs.writeScript "udhcpc-event" ''
     #!/bin/sh
     case "$1" in
       deconfig)
+        ip -4 route flush dev "$interface"
         ip -4 addr flush dev "$interface"
         ;;
       bound | renew)
+        ip -4 route flush dev "$interface"
         ip -4 addr flush dev "$interface"
         ip -4 addr add "$ip/''${mask:-24}" dev "$interface"
-        ip -4 route flush dev "$interface"
-        for gw in $router; do ip -4 route add default via "$gw" dev "$interface"; done
+        for gw in $router; do
+          ip -4 route replace default via "$gw" dev "$interface" ||
+            echo "udhcpc-event: cannot add default route via $gw on $interface" >&2
+        done
         : > /etc/resolv.conf
         for ns in $dns; do echo "nameserver $ns" >> /etc/resolv.conf; done
         ;;
@@ -250,8 +256,10 @@ in
     etc.hostname.source = pkgs.writeText "hostname" "${cfg.hostName}\n";
 
     # mixos runs busybox ntpd when /etc/ntp.conf exists. Its event script
-    # keeps /run/ntp-synced while the clock is synchronised: the OLED shows
-    # UTC and Eastern time only then.
+    # keeps /run/ntp-synced only while ntpd reports a stratum below 16
+    # (synchronised): the OLED shows UTC and Eastern time only then.
+    # busybox ntpd also runs the script with "periodic" while it is not
+    # synchronised, so the event name alone is not sufficient.
     etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
       server pool.ntp.org
     '';
@@ -262,7 +270,18 @@ in
         exec /bin/ntpd -n -S ${pkgs.writeScript "ntp-event" ''
           #!/bin/sh
           case "$1" in
-            step | stratum | periodic) touch /run/ntp-synced ;;
+            step | stratum | periodic)
+              case "''${stratum:-16}" in
+                "" | *[!0-9]*) rm -f /run/ntp-synced ;;
+                *)
+                  if [ "''${stratum:-16}" -lt 16 ]; then
+                    touch /run/ntp-synced
+                  else
+                    rm -f /run/ntp-synced
+                  fi
+                  ;;
+              esac
+              ;;
             unsync) rm -f /run/ntp-synced ;;
           esac
         ''}

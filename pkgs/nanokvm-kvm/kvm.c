@@ -16,7 +16,12 @@
 // Video is paced by the slowest client: the video thread emits a frame
 // only when every client has drained the previous one, and in the meantime
 // accumulates which tiles changed, so a slow link gets fewer, larger
-// updates rather than a growing backlog.
+// updates rather than a growing backlog. A client that takes no bytes for
+// CLIENT_STALL_S is dropped, so a dead connection cannot stop the video
+// for the others.
+//
+// A capture that stops delivering frames while there is a signal is
+// restarted, and the process exits if that does not help (watchdog.h).
 #define _GNU_SOURCE
 #include <arpa/inet.h>
 #include <dirent.h>
@@ -50,6 +55,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "watchdog.h"
 
 #ifndef WEB_DIR
 #define WEB_DIR "www"
@@ -1308,11 +1315,33 @@ static void *video_main(void *arg)
 	double stat_t = now();
 	struct vstat vs = { 0 };
 	int vpss_ok = 0;
+	struct watchdog wd = { 0 };
+	int watching = 0;
 
 	for (;;) {
 		int want = atomic_load(&want_mode);
 		int w = 0, h = 0, sig = hdmi_signal(&w, &h);
 		int idle = atomic_load(&n_viewers) == 0;
+
+		// A capture must stream while there is a signal and a viewer
+		// (sg2002-h264-bridge owns it in h264 mode). Restart it when no
+		// frame arrives for STALL_S, or exit after the restarts fail.
+		int watch = sig && !idle && want != MODE_H264;
+		double wt = now();
+		if (watch && (!watching || want != mode || w != sw || h != sh))
+			wd_reset(&wd, wt);
+		watching = watch;
+		enum wd_action act = watch ? wd_check(&wd, wt) : WD_OK;
+		if (act == WD_EXIT) {
+			log("capture stalled for %.0f s at %dx%d; restarts did not help, exiting", wd_stalled(&wd, wt), w, h);
+			exit(EXIT_STALLED);
+		}
+		if (act == WD_RESTART) {
+			log("capture stalled for %.0f s at %dx%d; reinitialising", wd_stalled(&wd, wt), w, h);
+			c906l_drain();
+			capture_close(&cap);
+			vpss_close(&vp);
+		}
 
 		// (Re)configure on mode, signal or size changes; stop when nobody
 		// is watching.
@@ -1368,41 +1397,52 @@ static void *video_main(void *arg)
 			}
 		} else if (cap.fd >= 0) {
 			struct pollfd p = { .fd = cap.fd, .events = POLLIN };
-			if (poll(&p, 1, 1000) <= 0) {
-				c906l_drain();
-				capture_close(&cap); // signal lost or stalled; re-probe
-				vpss_close(&vp);
-				continue;
-			}
-			// Take the newest frame, requeue older ones.
 			struct v4l2_buffer b;
-			if (capture_dq(&cap, &b) < 0)
-				continue;
-			double t0 = now();
-			c906l_collect(&vs, 0);
-			int key = atomic_exchange(&want_key, 0);
-			if (key) {
-				memset(tl.dirty, 1, (size_t)tl.tw * tl.th);
-				tl.any_dirty = 1;
-			}
-			const uint8_t *frame = cap.mem[b.index];
-			if (!(b.flags & V4L2_BUF_FLAG_ERROR) && t0 - vs.last_emit >= 1.0 / max_fps &&
-			    atomic_load(&want_frame)) {
-				tiles_update(&tl, frame, cap.stride);
-				if (tl.any_dirty && mode == MODE_TILES)
-					emit(&vs, tiles_message(&tl), t0);
-				else if (tl.any_dirty) {
-					int y0, y1, half = mode == MODE_MJPEG_HALF;
-					tiles_take_rows(&tl, &y0, &y1);
-					const uint8_t *nv12 = NULL;
-					if (half && vpss_ok && vpss_run(&vp, &cap, (int)b.index) == 0)
-						nv12 = vp.mem;
-					mjpeg_send(&vs, t0, &pl, &tl, frame, cap.stride, nv12, vp.stride, half, y0, y1);
-					if (nv12)
-						vpss_done(&vp);
+			if (poll(&p, 1, 1000) <= 0) {
+				// No frame: the watchdog restarts a capture that stays silent.
+			} else if (capture_dq(&cap, &b) < 0) {
+				// The driver stopped the stream (a source change or a FIFO
+				// overflow) and fails the queue until it starts again.
+				if (errno != EAGAIN) {
+					log("capture: %s at %dx%d; reinitialising", strerror(errno), sw, sh);
+					c906l_drain();
+					capture_close(&cap);
+					vpss_close(&vp);
+					sleep(1);
 				}
+			} else {
+				// Take the newest frame, requeue older ones.
+				double t0 = now();
+				if (!(b.flags & V4L2_BUF_FLAG_ERROR)) {
+					double stalled = wd_stalled(&wd, t0);
+					if (wd_frame(&wd, t0))
+						log("capture recovered after %.0f s", stalled);
+				}
+				c906l_collect(&vs, 0);
+				int key = atomic_exchange(&want_key, 0);
+				if (key) {
+					memset(tl.dirty, 1, (size_t)tl.tw * tl.th);
+					tl.any_dirty = 1;
+				}
+				const uint8_t *frame = cap.mem[b.index];
+				if (!(b.flags & V4L2_BUF_FLAG_ERROR) && t0 - vs.last_emit >= 1.0 / max_fps &&
+				    atomic_load(&want_frame)) {
+					tiles_update(&tl, frame, cap.stride);
+					if (tl.any_dirty && mode == MODE_TILES)
+						emit(&vs, tiles_message(&tl), t0);
+					else if (tl.any_dirty) {
+						int y0, y1, half = mode == MODE_MJPEG_HALF;
+						tiles_take_rows(&tl, &y0, &y1);
+						const uint8_t *nv12 = NULL;
+						if (half && vpss_ok && vpss_run(&vp, &cap, (int)b.index) == 0)
+							nv12 = vp.mem;
+						mjpeg_send(&vs, t0, &pl, &tl, frame, cap.stride, nv12, vp.stride, half, y0, y1);
+						if (nv12)
+							vpss_done(&vp);
+					}
+				}
+				capture_q(&cap, &b);
 			}
-			capture_q(&cap, &b);
 		}
 
 		double t = now();
@@ -1829,6 +1869,7 @@ static void base64(const uint8_t *in, size_t len, char *out)
 
 #define MAX_CLIENTS 8
 #define OUT_MAX 64
+#define CLIENT_STALL_S 10 // a client that takes no bytes for this long is dropped
 
 struct client {
 	int fd;
@@ -1840,6 +1881,7 @@ struct client {
 	struct msg *out[OUT_MAX];
 	int out_n;
 	size_t out_off;    // bytes of out[0] already sent
+	double sent_at;    // last bytes sent, or when the queue stopped being empty
 };
 
 static struct client clients[MAX_CLIENTS];
@@ -1861,6 +1903,8 @@ static void client_send(struct client *c, struct msg *m)
 		msg_unref(m);
 		return;
 	}
+	if (!c->out_n)
+		c->sent_at = now();
 	c->out[c->out_n++] = m;
 }
 
@@ -1879,6 +1923,7 @@ static int client_flush(struct client *c)
 		ssize_t n = send(c->fd, m->data + m->off + c->out_off, m->len - c->out_off, MSG_NOSIGNAL);
 		if (n < 0)
 			return errno == EAGAIN || errno == EINTR ? 0 : -1;
+		c->sent_at = now();
 		c->out_off += (size_t)n;
 		if (c->out_off < m->len)
 			return 0;
@@ -2453,6 +2498,12 @@ int main(int argc, char **argv)
 			}
 			if (!dead)
 				dead = client_flush(c) < 0;
+			// A connection that takes nothing (a peer gone without a FIN,
+			// a stuck tunnel) would hold back the video for every viewer.
+			if (!dead && c->out_n && t - c->sent_at > CLIENT_STALL_S) {
+				log("client took no data for %d s; dropping it", CLIENT_STALL_S);
+				dead = 1;
+			}
 			if (dead)
 				client_drop(c);
 		}

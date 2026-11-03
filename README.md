@@ -306,6 +306,19 @@ for a key frame every 30 ms):
   Coda980's P pictures smear static content within a few frames.
 - Capture runs into CMA-heap buffers mapped cached: the capture driver's
   own buffers are uncached, and reading a frame from them took 85 ms.
+- Recovery: while there is an HDMI signal and a viewer (in every mode but
+  `h264`, where sg2002-h264-bridge owns the capture), the capture
+  delivers every frame, also when the picture does not change (61–64
+  frames/s measured with a static 1080p picture). If no good frame comes
+  for 3 s, nanokvm-kvm restarts the capture, again after 6 s more, and
+  then exits with status 75 after 12 s more; runit then starts it again
+  and the page reconnects. When the driver fails the capture queue (for
+  example on a source change), nanokvm-kvm restarts the capture after
+  1 s. A client that takes no bytes for 10 s is dropped: video goes out
+  only when every viewer has taken the last picture, so one dead
+  connection stopped it for all. Each step is in the log (`capture
+  stalled for 3 s at 1920x1080; reinitialising`, `capture recovered after
+  4 s`, `client took no data for 10 s; dropping it`).
 
 ## Display
 

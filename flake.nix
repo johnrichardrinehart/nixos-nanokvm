@@ -187,6 +187,7 @@
               (import ./tests/device.nix { diskoLib = disko.lib; })
             ];
           };
+          kvm-watchdog = pkgs.callPackage ./tests/kvm-watchdog.nix { };
         }
       );
 

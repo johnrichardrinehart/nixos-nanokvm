@@ -249,6 +249,16 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
   unwired LED input floats), so each control appears only after it is
   ticked in the UI's ATX… menu, kept in `/state/nanokvm-kvm-atx`; the
   server ignores presses on lines not ticked.
+- View only: on at every page load (the page does not remember it), so
+  each new viewer only watches. The page then sends only key-frame
+  requests: no keys, pointer, paste or ATX presses. The video mode and
+  ATX controls are disabled, and the picture takes no keyboard focus, so
+  Tab and Space work on the page. To send input, click "View only" and
+  confirm: the button then reads "Input live" and the header is red.
+  Click it again to go back. View only stops accidental input from
+  viewers; it is not access control. The server accepts input from all
+  clients, for example a script that sends `k` and `atx` messages on
+  `/ws`.
 - Cabling (NanoKVM Full): the target's USB goes to the USB-C port next to
   HDMI on the side of the case's dark end (PC-USB); the other USB-C beside
   HDMI (AUX) is power only; the KVM-B board goes to the USB-C beside

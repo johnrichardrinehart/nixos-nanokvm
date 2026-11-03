@@ -1,5 +1,6 @@
 // NanoKVM web client: draws the video the server sends over /ws and sends
-// keyboard, pointer and ATX commands back (protocol in kvm.c).
+// keyboard, pointer and ATX commands back (protocol in kvm.c), the latter
+// only while view only is off.
 "use strict";
 
 const canvas = document.getElementById("screen");
@@ -8,8 +9,15 @@ const overlay = document.getElementById("overlay");
 const $ = (id) => document.getElementById(id);
 let ws = null;
 let status = {};
+// View only: on at every page load and never remembered, so each new
+// viewer starts with it. While on, send() lets only key-frame requests
+// (video) through: no key, pointer, paste, ATX or settings message leaves
+// the page. The server knows nothing of it; other clients still control
+// the target.
+let viewOnly = true;
 
 function send(s) {
+  if (viewOnly && s !== "key") return;
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(s);
 }
 
@@ -402,5 +410,42 @@ document.addEventListener("click", (e) => {
 for (const box of document.querySelectorAll("#atxpanel input"))
   box.onchange = () => send(`atx-wired ${box.dataset.line} ${box.checked ? 1 : 0}`);
 
+// --- View only -----------------------------------------------------------
+
+// On: the picture cannot take keyboard focus, so keys keep their usual
+// meaning on the page (Tab, Space), and every control marked data-live
+// (it acts on the target or changes the server's settings) is disabled.
+// Off: the picture takes focus and input goes to the target; the toggle
+// and the header turn red.
+function setViewOnly(on) {
+  if (on && !viewOnly) {
+    // Release what is held while the gate is still open.
+    send("r");
+    if (buttons) { buttons = 0; flushPointerNow(); }
+  }
+  viewOnly = on;
+  buttons = 0; pending = null; wheel = 0;
+  if (on) {
+    canvas.blur();
+    canvas.removeAttribute("tabindex");
+    $("atxpanel").hidden = true;
+  } else canvas.tabIndex = 0;
+  for (const el of document.querySelectorAll("[data-live]")) el.disabled = on;
+  $("pastehint").hidden = on;
+  document.body.classList.toggle("live", !on);
+  const b = $("viewonly");
+  b.setAttribute("aria-pressed", String(on));
+  b.textContent = on ? "View only" : "Input live";
+  b.title = on
+    ? "Keys, mouse and buttons do not reach the target. Click to send input."
+    : "This browser's keys and mouse go to the target. Click for view only.";
+}
+$("viewonly").onclick = () => {
+  if (!viewOnly) return setViewOnly(true);
+  if (!confirm("Send this browser's keys, mouse and buttons to the target?")) return;
+  setViewOnly(false);
+  canvas.focus();
+};
+setViewOnly(true);
+
 connect();
-canvas.focus();

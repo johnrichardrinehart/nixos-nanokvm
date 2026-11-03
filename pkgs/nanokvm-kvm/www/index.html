@@ -9,7 +9,8 @@
 <body>
 <header>
   <span class="brand">nixos-nanokvm</span>
-  <label>Video <select id="mode"></select></label>
+  <button id="viewonly" aria-pressed="true">View only</button>
+  <label>Video <select id="mode" data-live></select></label>
   <span id="stats" class="muted"></span>
   <span id="viewers" class="muted" title="Browsers connected to this NanoKVM, this one included"></span>
   <span class="spacer"></span>
@@ -17,12 +18,12 @@
   <span id="caps" class="pill" title="Caps Lock on the target">Caps</span>
   <span id="led" class="pill" title="Target power LED" hidden>Power LED</span>
   <span id="pastehint" class="muted" title="Types this computer's clipboard into the target (US layout)">⌘V pastes</span>
-  <button id="cad" title="Send Ctrl+Alt+Delete">Ctrl+Alt+Del</button>
-  <button id="power" title="Short press of the power button" hidden>Power</button>
-  <button id="powerlong" title="Hold the power button for 5 s" hidden>Force off</button>
-  <button id="reset" title="Press the reset button" hidden>Reset</button>
+  <button id="cad" title="Send Ctrl+Alt+Delete" data-live>Ctrl+Alt+Del</button>
+  <button id="power" title="Short press of the power button" data-live hidden>Power</button>
+  <button id="powerlong" title="Hold the power button for 5 s" data-live hidden>Force off</button>
+  <button id="reset" title="Press the reset button" data-live hidden>Reset</button>
   <span class="atx-menu">
-    <button id="atx" title="Which ATX header lines are wired to the target">ATX…</button>
+    <button id="atx" title="Which ATX header lines are wired to the target" data-live>ATX…</button>
     <div id="atxpanel" class="panel" hidden>
       <p>Lines wired from the KVM-B board to the target's front-panel header:</p>
       <label><input type="checkbox" data-line="power"> Power button</label>
@@ -32,7 +33,7 @@
   </span>
 </header>
 <main>
-  <canvas id="screen" tabindex="0" width="1280" height="720"></canvas>
+  <canvas id="screen" width="1280" height="720"></canvas>
   <div id="overlay">Connecting…</div>
 </main>
 <script src="kvm.js"></script>

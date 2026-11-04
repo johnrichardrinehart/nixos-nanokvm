@@ -84,6 +84,23 @@ if [ "$assume_yes" = 0 ]; then
   [ "$answer" = y ] || [ "$answer" = Y ] || die "aborted"
 fi
 
+tmp="$(mktemp -d)"
+hold=""
+cleanup() {
+  [ -z "$hold" ] || kill "$hold" 2>/dev/null || true
+  rm -rf "$tmp"
+}
+trap cleanup EXIT
+if [ "$os" = Darwin ]; then
+  # Disk Arbitration mounts the FAT partition read-write after each raw
+  # write and changes it (.fseventsd), which breaks the read-back check.
+  mkfifo "$tmp/hold"
+  nanokvm-hold-disk "${disk#/dev/}" >"$tmp/hold" &
+  hold=$!
+  read -r ready <"$tmp/hold" && [ "$ready" = ready ] ||
+    die "could not stop macOS from mounting $disk"
+fi
+
 as_root() {
   if [ -w "$raw" ]; then "$@"; else sudo "$@"; fi
 }
@@ -104,7 +121,7 @@ if [ -n "$backup" ]; then
   say "saving $disk to $backup"
   as_root dd if="$raw" bs=4194304 status=none | zstd -T0 -3 -q -o "$backup" ||
     die "backup failed; nothing was written"
-  unmount # macOS may remount after the read
+  unmount # a Linux desktop automounter may remount after the read
 fi
 
 decompress() {
@@ -115,8 +132,6 @@ decompress() {
 }
 
 say "writing $(basename "$image") to $disk"
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
 # Hash and count the stream while writing it, so a downloaded image is
 # checked against exactly what went to the card.
 decompress | tee >(sha256sum | cut -d' ' -f1 >"$tmp/sha") >(wc -c | tr -d ' ' >"$tmp/size") |

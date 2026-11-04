@@ -89,7 +89,9 @@ nix run .#flash-sd -- --image nanokvm-sd.img.zst /dev/disk6   # a release downlo
 ```
 
 On macOS the tool carries no image of its own (that would need a Linux
-builder): pass `--image`.
+builder): pass `--image`. While it works, it stops macOS from mounting the
+card. A mount writes `.fseventsd` to the FAT partition, and the read-back
+check then fails.
 
 It refuses fixed disks, asks before erasing, writes through `sudo` when
 needed and reads the card back against the image's SHA-256. Options:

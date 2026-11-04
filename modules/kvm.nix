@@ -27,6 +27,12 @@ let
     # Which ATX lines are wired, set in the UI; kept across reboots.
     "--atx-config"
     "/state/nanokvm-kvm-atx"
+    "--usb-watchdog"
+    (if cfg.usbWatchdog.enable then "on" else "off")
+  ]
+  ++ lib.optionals (cfg.usbWatchdog.holdPath != null) [
+    "--usb-hold"
+    cfg.usbWatchdog.holdPath
   ]
   ++ lib.optionals h264 [
     "--h264-bridge"
@@ -41,6 +47,26 @@ in
   options.nanokvm.kvm = {
     enable = lib.mkEnableOption "the web KVM" // {
       default = true;
+    };
+    usbWatchdog = {
+      enable =
+        lib.mkEnableOption ''
+          binding the USB gadget again when it stays "not attached" for 3 s
+          while bound: after some reboots and power cycles, the target does
+          not enumerate the keyboard and mouse again until then. Retries back
+          off up to 60 s while the target is off''
+        // {
+          default = true;
+        };
+      holdPath = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = "/run/hil-windows-install.lock";
+        description = ''
+          The watchdog waits while this path exists. hil-windows-install
+          (test-infrastructure) holds this lock while it reconfigures the
+          gadget for an installation and binds it by itself.
+        '';
+      };
     };
     listenAddress = lib.mkOption {
       type = lib.types.str;

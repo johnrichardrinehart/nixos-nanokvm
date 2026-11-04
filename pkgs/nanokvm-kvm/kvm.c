@@ -56,6 +56,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "usb_watchdog.h"
 #include "watchdog.h"
 
 #ifndef WEB_DIR
@@ -1697,6 +1698,32 @@ static const char *usb_state(void)
 	return s;
 }
 
+// USB watchdog (usb_watchdog.h): binds the gadget to the UDC again when the
+// target stays without it. usb_hold: while this path exists, another program
+// (hil-windows-install attaching disks) holds the gadget.
+#define USB_GADGET "/sys/kernel/config/usb_gadget/nanokvm"
+static const char *usb_hold;
+static int usb_watchdog_on = 1;
+
+static void usb_watchdog(double t)
+{
+	static struct usb_watchdog w = { .wait = USB_WD_FIRST_S };
+	char udc[64] = "";
+	FILE *f = fopen(USB_GADGET "/UDC", "r");
+	if (f) {
+		if (fgets(udc, sizeof udc, f))
+			udc[strcspn(udc, "\n")] = 0;
+		fclose(f);
+	}
+	int held = usb_hold && access(usb_hold, F_OK) == 0;
+	if (!usb_watchdog_on ||
+	    !usb_wd_check(&w, t, udc[0] != 0, held, !strcmp(usb_state(), "not attached")))
+		return;
+	log("usb: not attached for %.0f s; binding the gadget to %s again", t - w.since, udc);
+	if (put_str(USB_GADGET, "UDC", "\n") < 0 || put_str(USB_GADGET, "UDC", udc) < 0)
+		log("usb: bind %s: %s", udc, strerror(errno));
+}
+
 // ---------------------------------------------------------------------------
 // ATX header: GPIOA23 power button, GPIOA25 reset button (outputs, high
 // presses), GPIOA24 power LED (input, low while the LED is lit), as in
@@ -2320,6 +2347,7 @@ static void usage(void)
 		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--mode tiles|mjpeg|mjpeg-half|h264]\n"
 		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH] [--c906l FIRMWARE]\n"
 		"                   [--atx-config FILE] [--tile 8..128, multiple of 8]\n"
+		"                   [--usb-watchdog on|off] [--usb-hold FILE]\n"
 		"       nanokvm-kvm --bench [FRAMES]\n");
 	exit(2);
 }
@@ -2338,7 +2366,13 @@ int main(int argc, char **argv)
 			addr = v;
 		else if (!strcmp(a, "--atx-config"))
 			atx_config = v;
-		else if (!strcmp(a, "--port"))
+		else if (!strcmp(a, "--usb-hold"))
+			usb_hold = v;
+		else if (!strcmp(a, "--usb-watchdog")) {
+			if (strcmp(v, "on") && strcmp(v, "off"))
+				usage();
+			usb_watchdog_on = !strcmp(v, "on");
+		} else if (!strcmp(a, "--port"))
 			port = atoi(v);
 		else if (!strcmp(a, "--quality"))
 			jpeg_quality = atoi(v);
@@ -2518,6 +2552,7 @@ int main(int argc, char **argv)
 		if (t >= next_status) {
 			next_status = t + 1;
 			hid_open();
+			usb_watchdog(t);
 			char st[512];
 			status_json(st, sizeof st);
 			for (int i = 0; i < MAX_CLIENTS; i++)

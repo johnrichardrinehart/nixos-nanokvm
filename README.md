@@ -244,6 +244,14 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
   into the target (US layout) without showing it; empty, non-text and
   binary clipboards are flagged and not typed. The gadget can wake a host
   that suspended the USB link (remote wakeup; a dwc2 kernel patch adds it).
+- USB watchdog: after some reboots and power cycles, a target does not
+  enumerate the gadget again, which stays "not attached" while bound
+  (keyboard and mouse dead). The server then binds it to the UDC again
+  after 3 s, and retries after 3, 6, 12, … up to 60 s while the target is
+  off (log: `usb: not attached for 3 s; binding the gadget … again`). It
+  does nothing while the gadget is unbound on purpose, or while
+  `kvm.usbWatchdog.holdPath` exists (another program reconfigures the
+  gadget).
 - ATX: power (short press, 5 s force off), reset, power LED. The NanoKVM
   cannot tell which header lines are wired (the buttons are outputs; an
   unwired LED input floats), so each control appears only after it is
@@ -346,6 +354,8 @@ in turn, 5 s each (whichever exist). Fonts: Spleen 5×8 and 8×16.
 | `kvm.mode` | `tiles` | `tiles`, `mjpeg`, `mjpeg-half`, `h264` (with the encoder) |
 | `kvm.jpegQuality`, `kvm.maxFps` | 70, 30 | |
 | `kvm.c906l.enable` | on | MJPEG encoding shared with the C906L |
+| `kvm.usbWatchdog.enable` | on | bind the USB gadget again when the target stays without it |
+| `kvm.usbWatchdog.holdPath` | `/run/hil-windows-install.lock` | the watchdog waits while this path exists; `null`: never |
 | `display.enable` | on | OLED status screen |
 | `display.brightness` | 255 | OLED contrast, 0–255 |
 
@@ -425,4 +435,5 @@ nix build .#checks.aarch64-linux.kernel-config     # every used DT node has a bu
 nix build .#checks.aarch64-linux.device            # state init + nanokvm-ab in mixos VMs
 nix build .#checks.aarch64-linux.flash-from-stock  # backup, write, verify against a stand-in stock VM
 nix build .#checks.aarch64-linux.flash-sd          # card-reader flashing against a USB card in a VM
+nix build .#checks.aarch64-linux.kvm-watchdog      # capture and USB watchdog decisions, on the build machine
 ```

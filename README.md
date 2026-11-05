@@ -394,10 +394,13 @@ in turn, 5 s each (whichever exist). Fonts: Spleen 5×8 and 8×16.
 
 ## Limits
 
-- Booted on a NanoKVM Full (beta carrier): boot, A/B state, watchdog, SSH,
-  HDMI capture in every video mode, USB keyboard and absolute pointer
-  (seen moving a Mac's pointer), OLED. The ATX lines are claimed and read;
-  pressing power/reset was not tried on a connected machine. The boot
+- Booted on two NanoKVM Full units (beta carrier), one with an LT6911UXE
+  bridge (the other bridge was not identified): boot, A/B state, watchdog, SSH, HDMI
+  capture in every video mode, USB keyboard and absolute pointer (seen
+  moving a Mac's pointer), OLED. On the UXE unit, the bridge interrupt
+  fired on each HDMI unplug and plug, and the ATX power button turned a
+  Lenovo M920q off and on. Reset was not tried on a connected machine.
+  flash-from-stock replaced the stock firmware of the UXE unit. The boot
   script and fastboot flashing also run in U-Boot's sandbox, the device
   side in mixos VMs, flash-from-stock against a stand-in stock VM and
   flash-sd against a USB card in a VM (`nix flake check`).

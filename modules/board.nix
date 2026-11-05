@@ -18,6 +18,11 @@ let
 
   # Linux must never map the C906L's region (lib/c906l.nix): reserved no-map
   # in the device tree it boots with.
+  #
+  # The LT6911 HDMI bridge's interrupt output (LT-INT in Sipeed's firmware)
+  # is GPIOE1, the PWR_GPIO1 pad, whose reset mux is already GPIO. As
+  # hpd-gpios, it lets the lt6911uxe driver read the mode of an LT6911UXE
+  # when the input changes; an LT6911UXC ignores it and is polled.
   fdt =
     pkgs.buildPackages.runCommand "sg2002-cube-c906l.dtb"
       { nativeBuildInputs = [ pkgs.buildPackages.dtc ]; }
@@ -28,6 +33,13 @@ let
         fdtput -c $out $node
         fdtput -t x $out $node reg ${lib.toHexString c906l.base} ${lib.toHexString c906l.size}
         fdtput -t s $out $node no-map ""
+
+        porte=/soc/gpio@5021000/gpio-controller@0
+        last=$(dtc -I dtb -O dts $out 2>/dev/null | sed -n 's/.*phandle = <\(0x[0-9a-f]*\)>.*/\1/p' | sort -u | while read -r p; do echo $((p)); done | sort -n | tail -n 1)
+        phandle=$((last + 1))
+        fdtput -t u $out $porte phandle $phandle
+        # GPIO_ACTIVE_HIGH
+        fdtput -t u $out /soc/i2c@4040000/hdmi-bridge@2b hpd-gpios $phandle 1 0
       '';
 
   bootScript = import ../lib/boot-script.nix { inherit lib; } {
@@ -120,8 +132,8 @@ let
             # host; the HID keyboard and mouse need it (pkgs/nanokvm-kvm).
             # A CD-ROM gadget LUN cuts files at 2.36 GB; the limit becomes
             # usb_f_mass_storage.cdrom_max_bytes (default: one DVD+R DL).
-            # Some units have an LT6911UXE HDMI bridge with no HPD IRQ
-            # wired; its mode is then read on each timing query.
+            # Some units have an LT6911UXE HDMI bridge, whose mode the
+            # driver otherwise does not report on timing queries.
             kernelPatches = (args.kernelPatches or [ ]) ++ [
               {
                 name = "dwc2-gadget-remote-wakeup";
@@ -132,8 +144,8 @@ let
                 patch = ../patches/linux-7.3-f_mass_storage-cdrom-max-bytes.patch;
               }
               {
-                name = "lt6911uxe-poll-without-hpd-irq";
-                patch = ../patches/linux-7.3-lt6911uxe-poll-without-hpd-irq.patch;
+                name = "lt6911uxe-uxe-timing-queries";
+                patch = ../patches/linux-7.3-lt6911uxe-uxe-timing-queries.patch;
               }
             ];
           }

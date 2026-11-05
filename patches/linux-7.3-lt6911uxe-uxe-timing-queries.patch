@@ -1,0 +1,99 @@
+From: John Rinehart <johnrichardrinehart@gmail.com>
+Subject: [PATCH] media: i2c: lt6911uxe: report the UXE mode on timing queries
+
+The driver updates the mode of an LT6911UXE only from its HPD IRQ
+handler, and query_dv_timings() returns -ENOIOCTLCMD for a UXE. Some
+NanoKVM units have a UXE (chip ID 0x2102) where others have a UXC, so
+userspace that queries timings never sees a signal on them.
+
+For a UXE with an HPD IRQ, query_dv_timings() returns the mode that the
+IRQ handler keeps, or -ENOLINK without a signal. The IRQ fires only on
+changes, so probe reads the mode once after it requests the IRQ. The
+IRQ handler now updates the mode under mode_lock.
+
+For a UXE without an HPD IRQ, query_dv_timings() reads the mode as it
+does for a UXC. REG_INT_HDMI and the timing registers hold the current
+state (checked on hardware with a 1080p60 source), so a poll reads them
+like the IRQ handler. A poll sends the source-change event only when the
+mode changes, and returns -ENOLINK when there is no signal.
+
+--- a/drivers/media/i2c/lt6911uxe.c
++++ b/drivers/media/i2c/lt6911uxe.c
+@@ -272,9 +272,17 @@
+ 	bool mode_changed = false;
+ 	int ret;
+ 
+-	/* UXC has no HPD IRQ; UXE refreshes cur_mode from its IRQ handler. */
+-	if (!lt6911uxe->is_uxc)
+-		return -ENOIOCTLCMD;
++	/*
++	 * A UXE with an HPD IRQ keeps cur_mode current from its IRQ handler.
++	 * UXC has no HPD IRQ, and a UXE wired without one has no other way
++	 * to learn its mode: both refresh cur_mode here.
++	 */
++	if (!lt6911uxe->is_uxc && lt6911uxe->irq_gpio) {
++		mutex_lock(&lt6911uxe->mode_lock);
++		lt6911uxe_get_detected_timings(sd, timings);
++		mutex_unlock(&lt6911uxe->mode_lock);
++		return timings->bt.width ? 0 : -ENOLINK;
++	}
+ 
+ 	ret = pm_runtime_resume_and_get(&client->dev);
+ 	if (ret < 0)
+@@ -312,6 +320,7 @@
+ 	u64 int_event;
+ 	u64 byte_clk, half_pix_clk, fps, format;
+ 	u64 half_htotal, vtotal, half_width, height;
++	struct lt6911uxe_mode old_mode;
+ 	int ret = 0;
+ 
+ 	if (lt6911uxe->is_uxc) {
+@@ -385,6 +394,14 @@
+ 		return ret;
+ 	}
+ 
++	/*
++	 * REG_INT_HDMI and the timing registers hold the current state, so a
++	 * poll (mode_changed set) reads them like the IRQ handler does.
++	 */
++	if (mode_changed)
++		*mode_changed = false;
++	old_mode = lt6911uxe->cur_mode;
++
+ 	/* Read interrupt event */
+ 	cci_read(lt6911uxe->regmap, REG_INT_HDMI, &int_event, &ret);
+ 	if (ret) {
+@@ -461,6 +478,14 @@
+ 	default:
+ 		ret = -ENOLINK;
+ 	}
++	if (mode_changed) {
++		/* The caller sends the source-change event on a change. */
++		*mode_changed = !lt6911uxe_mode_equal(&old_mode,
++						      &lt6911uxe->cur_mode);
++		if (!ret && !lt6911uxe->cur_mode.width)
++			ret = -ENOLINK;
++		return ret;
++	}
+ 	v4l2_subdev_notify_event(&lt6911uxe->sd, &lt6911uxe_ev_source_change);
+ 	return ret;
+ }
+@@ -814,7 +839,9 @@
+ 		.which = V4L2_SUBDEV_FORMAT_ACTIVE
+ 	};
+ 
++	mutex_lock(&lt6911uxe->mode_lock);
+ 	lt6911uxe_status_update(lt6911uxe, NULL);
++	mutex_unlock(&lt6911uxe->mode_lock);
+ 	state = v4l2_subdev_lock_and_get_active_state(sd);
+ 	/*
+ 	 * As a HDMI to CSI2 bridge, it needs to update the format in time
+@@ -927,6 +954,8 @@
+ 			dev_err(dev, "failed to request IRQ: %d\n", ret);
+ 			goto subdev_cleanup;
+ 		}
++		/* The IRQ fires on changes only: read a signal present now. */
++		lt6911uxe_threaded_irq_fn(0, lt6911uxe);
+ 	}
+ 
+ 	ret = v4l2_async_register_subdev_sensor(&lt6911uxe->sd);

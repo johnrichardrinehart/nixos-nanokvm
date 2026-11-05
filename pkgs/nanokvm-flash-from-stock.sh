@@ -185,11 +185,13 @@ fi
 
 say "writing the image (the device verifies it, then reboots)"
 # One session: the stock shell and sshd are never needed again, and the
-# write carries on (nohup) if this connection drops.
+# write carries on (nohup) if this connection drops. The log exists before
+# tail starts: busybox tail -f fails on a missing file.
 set +e
 remote "$stage/busybox sh -c '
   b=$stage/busybox
-  \$b nohup \$b sh $stage/flash.sh write $disk $stage/image.img.zst $SD_RAW_SHA256 $SD_SIZE >$stage/log 2>&1 &
+  : >$stage/log
+  \$b nohup \$b sh $stage/flash.sh write $disk $stage/image.img.zst $SD_RAW_SHA256 $SD_SIZE >>$stage/log 2>&1 &
   pid=\$!
   \$b tail -f $stage/log & tail=\$!
   wait \$pid; status=\$?

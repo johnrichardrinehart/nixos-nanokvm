@@ -120,6 +120,8 @@ let
             # host; the HID keyboard and mouse need it (pkgs/nanokvm-kvm).
             # A CD-ROM gadget LUN cuts files at 2.36 GB; the limit becomes
             # usb_f_mass_storage.cdrom_max_bytes (default: one DVD+R DL).
+            # Some units have an LT6911UXE HDMI bridge with no HPD IRQ
+            # wired; its mode is then read on each timing query.
             kernelPatches = (args.kernelPatches or [ ]) ++ [
               {
                 name = "dwc2-gadget-remote-wakeup";
@@ -128,6 +130,10 @@ let
               {
                 name = "f_mass_storage-cdrom-max-bytes";
                 patch = ../patches/linux-7.3-f_mass_storage-cdrom-max-bytes.patch;
+              }
+              {
+                name = "lt6911uxe-poll-without-hpd-irq";
+                patch = ../patches/linux-7.3-lt6911uxe-poll-without-hpd-irq.patch;
               }
             ];
           }

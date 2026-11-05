@@ -15,7 +15,8 @@ watchdog armed by the bootloader.
   taking it from a release image.
 - Kernel: nixos-nanokvm's SG2002 patch set with a minimal configuration,
   `allnoconfig` plus `lib/kernel-config.nix`, all built in (no modules).
-  It drives the NanoKVM's hardware: HDMI capture (LT6911 bridge, CSI,
+  It drives the NanoKVM's hardware: HDMI capture (LT6911UXC or LT6911UXE
+  bridge, CSI,
   VPSS scaler, Coda980 H.264 encoder), the USB device port (HID, mass storage, ECM/NCM/RNDIS,
   ACM gadgets via configfs), ATX buttons and LEDs (GPIO character
   devices, `/dev/mem` for pad muxing), the OLED, Ethernet, SD card,

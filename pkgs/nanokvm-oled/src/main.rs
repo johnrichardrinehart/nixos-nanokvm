@@ -3,6 +3,7 @@
 //!   nanokvm-oled [FB]                redraw FB (default /dev/fb0) every 5 s
 //!   nanokvm-oled --pbm FILE          one frame as a PBM image (preview)
 //!   nanokvm-oled --splash-pbm FILE   the splash as a PBM image
+//!   nanokvm-oled --logo-pbm FILE     the site's logo as a PBM image
 //!
 //! Reads /proc, /sys, the kernel command line and nanokvm-ab's runtime
 //! flags; never the card. Every `write()` to ssd1307fb's framebuffer goes to
@@ -15,7 +16,7 @@ use std::fs;
 use std::net::Ipv6Addr;
 use std::path::Path;
 
-use nanokvm_oled::{Align, Field, Font, MARQUEE_STEP_MS, Overflow, Screen, Text, W};
+use nanokvm_oled::{Align, Bitmap, Field, Font, H, MARQUEE_STEP_MS, Overflow, Screen, Text, W};
 use nix::ifaddrs::getifaddrs;
 use nix::sys::time::TimeSpec;
 use nix::time::{ClockId, ClockNanosleepFlags, clock_gettime, clock_nanosleep};
@@ -25,6 +26,20 @@ const BIG: Font = Font::psf(include_bytes!(env!("NANOKVM_OLED_FONT_BIG")));
 const VERSION: &str = match option_env!("NANOKVM_VERSION") {
     Some(v) => v,
     None => "dev",
+};
+// Site images (modules/display.nix), rasterised by the build; an empty
+// file is none. The logo is shown after the splash; the header icon takes
+// the place of the project's mark in the header bar.
+const LOGO: Option<Bitmap> = Bitmap::pbm(include_bytes!(env!("NANOKVM_OLED_LOGO")));
+const HEADER_ICON: Option<Bitmap> = Bitmap::pbm(include_bytes!(env!("NANOKVM_OLED_HEADER_ICON")));
+const _: () = {
+    if let Some(b) = &HEADER_ICON {
+        // Left of the hostname (x = 13), inside the bar (y = 1..10).
+        assert!(
+            b.width <= 10 && b.height <= 9,
+            "the header icon is larger than 10x9"
+        );
+    }
 };
 const IFACE: &str = "eth0";
 const REDRAW_MS: i64 = 5000;
@@ -362,7 +377,10 @@ fn header(s: &mut Screen, state_dir: &Path) -> (bool, bool) {
         (false, false) => &ICON_CROSS,
     };
     s.icon(W - 11, 1, state, false);
-    s.icon(2, 1, &ICON_FLAKE, false);
+    match &HEADER_ICON {
+        Some(b) => s.bitmap(2, 1, b, false),
+        None => s.icon(2, 1, &ICON_FLAKE, false),
+    }
     // Anchored at the clock's zero: the 5 s redraws continue its scroll.
     let host = read_line("/proc/sys/kernel/hostname").unwrap_or_default();
     s.put(&HOST, &host, 0);
@@ -439,6 +457,14 @@ fn splash(s: &mut Screen) {
     s.put(&SPLASH_BUILD, &format!("mixos  A/B  {VERSION}"), 0);
 }
 
+/// The site's logo, centred, if the build has one.
+fn logo(s: &mut Screen) -> bool {
+    let Some(logo) = &LOGO else { return false };
+    s.clear();
+    s.bitmap((W - logo.width) / 2, (H - logo.height) / 2, logo, true);
+    true
+}
+
 fn show(dev: &str, frame: &[u8]) {
     if let Err(e) = fs::write(dev, frame) {
         eprintln!("nanokvm-oled: {dev}: {e}");
@@ -475,6 +501,12 @@ fn main() {
                 fs::write(file, nanokvm_oled::pbm(screen.compose(0))).is_err(),
             ));
         }
+        [flag, file] if flag == "--logo-pbm" => {
+            logo(&mut screen);
+            std::process::exit(i32::from(
+                fs::write(file, nanokvm_oled::pbm(screen.compose(0))).is_err(),
+            ));
+        }
         _ => {}
     }
     let dev = args.first().map_or("/dev/fb0", String::as_str);
@@ -482,6 +514,10 @@ fn main() {
     show(dev, screen.compose(0));
     cpu.busy();
     std::thread::sleep(std::time::Duration::from_secs(3));
+    if logo(&mut screen) {
+        show(dev, screen.compose(0));
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
     // Redraw on every multiple of 5 s of the clock that is shown, so the
     // clock reads :00 or :05 and the rotating rows change with it. Between
     // redraws, a marquee moves one pixel per step.

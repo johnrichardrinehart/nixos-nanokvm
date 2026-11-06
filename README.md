@@ -374,6 +374,8 @@ panel, and only when they change.
 | `kvm.usbWatchdog.holdPath` | `/run/hil-windows-install.lock` | the watchdog waits while this path exists; `null`: never |
 | `display.enable` | on | OLED status screen |
 | `display.brightness` | 255 | OLED contrast, 0–255 |
+| `display.logo` | none | SVG shown for 3 s after the splash (fit into 128×64) |
+| `display.headerIcon` | the project's mark | SVG for the icon of the header bar (9×9) |
 
 | `nanokvm.ab.*` | Default | Notes |
 | --- | --- | --- |

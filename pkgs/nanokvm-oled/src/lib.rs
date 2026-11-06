@@ -91,6 +91,73 @@ impl Font {
     }
 }
 
+/// A 1 bpp image from a binary PBM file (P4), parsed at compile time.
+pub struct Bitmap {
+    bits: &'static [u8],
+    pub width: i32,
+    pub height: i32,
+}
+
+/// Skips whitespace, then reads a decimal number; returns it and the
+/// position after it.
+const fn pbm_number(data: &[u8], mut at: usize) -> (usize, usize) {
+    while at < data.len() && data[at].is_ascii_whitespace() {
+        at += 1;
+    }
+    assert!(
+        at < data.len() && data[at].is_ascii_digit(),
+        "a PBM header without its size (comments are not read)"
+    );
+    let mut n = 0;
+    while at < data.len() && data[at].is_ascii_digit() {
+        n = n * 10 + (data[at] - b'0') as usize;
+        at += 1;
+    }
+    (n, at)
+}
+
+impl Bitmap {
+    /// Parses a binary PBM (P4) image; an empty file is no image.
+    ///
+    /// # Panics
+    ///
+    /// On another format, or on a file shorter than its size: in a `const`
+    /// item, the build fails.
+    #[must_use]
+    pub const fn pbm(data: &'static [u8]) -> Option<Bitmap> {
+        if data.is_empty() {
+            return None;
+        }
+        assert!(
+            data.len() > 2 && data[0] == b'P' && data[1] == b'4',
+            "not a binary PBM (P4) image"
+        );
+        let (width, at) = pbm_number(data, 2);
+        let (height, at) = pbm_number(data, at);
+        // One whitespace byte, then the rows: MSB first, padded to bytes.
+        let (_, bits) = data.split_at(at + 1);
+        assert!(
+            bits.len() >= width.div_ceil(8) * height,
+            "a PBM image shorter than its size"
+        );
+        assert!(
+            width <= W as usize && height <= H as usize,
+            "a PBM image larger than the screen"
+        );
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "at most the screen's size"
+        )]
+        let (width, height) = (width as i32, height as i32);
+        Some(Bitmap {
+            bits,
+            width,
+            height,
+        })
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Align {
     Left,
@@ -348,6 +415,21 @@ impl Screen {
         }
     }
 
+    /// The lit pixels of `b` with their top left at (x, y).
+    pub fn bitmap(&mut self, x: i32, y: i32, b: &Bitmap, on: bool) {
+        #[expect(clippy::cast_sign_loss, reason = "the width is not negative")]
+        let row = (b.width as usize).div_ceil(8);
+        for (j, line) in (0..b.height).zip(b.bits.chunks(row)) {
+            for i in 0..b.width {
+                #[expect(clippy::cast_sign_loss, reason = "i is not negative")]
+                let lit = line[i as usize / 8] & (0x80 >> (i % 8)) != 0;
+                if lit {
+                    self.px(x + i, y + j, on);
+                }
+            }
+        }
+    }
+
     /// A bar gauge: an outline with the share `frac` (0..1) filled.
     pub fn gauge(&mut self, (x, y, w, h): (i32, i32, i32, i32), frac: f64) {
         self.frame((x, y, w, h));
@@ -469,6 +551,19 @@ mod tests {
         0x72, 0xb5, 0x4a, 0x86, 0, 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 2, 0,
         0, 0, 3, 0, 0, 0, 0, 0, 0x80, 0,
     ]);
+
+    #[test]
+    fn pbm_image() {
+        const B: Option<Bitmap> = Bitmap::pbm(b"P4\n9 2\n\x80\x80\x00\x00");
+        let b = B.unwrap();
+        assert_eq!((b.width, b.height), (9, 2));
+        let mut s = Screen::default();
+        s.bitmap(3, 0, &b, true);
+        let f = s.compose(0);
+        // Row 0: the first and the ninth pixel; row 1: none.
+        assert_eq!((f[0], f[1], f[16], f[17]), (1 << 3, 1 << 3, 0, 0));
+        assert!(Bitmap::pbm(b"").is_none());
+    }
 
     #[test]
     fn psf2_header() {

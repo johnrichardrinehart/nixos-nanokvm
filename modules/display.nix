@@ -12,8 +12,14 @@
 let
   cfg = config.nanokvm.display;
   oled = pkgs.callPackage ../pkgs/nanokvm-oled {
-    inherit (pkgs.buildPackages) spleen;
-    inherit (cfg) version;
+    inherit (pkgs.buildPackages)
+      spleen
+      runCommand
+      emptyFile
+      librsvg
+      netpbm
+      ;
+    inherit (cfg) version logo headerIcon;
   };
 in
 {
@@ -25,6 +31,22 @@ in
       type = lib.types.str;
       default = "dev";
       description = "Build identifier shown on the splash screen.";
+    };
+    logo = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        SVG image shown for 3 s after the splash, fit into 128x64. Its dark
+        parts are the lit pixels.
+      '';
+    };
+    headerIcon = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = ''
+        SVG image for the icon at the left of the header bar (9x9), in
+        place of the project's mark. Its dark parts are the dark pixels.
+      '';
     };
     brightness = lib.mkOption {
       type = lib.types.ints.between 0 255;

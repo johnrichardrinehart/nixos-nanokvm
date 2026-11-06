@@ -8,6 +8,8 @@
   libjpeg,
   # The web page's title (the browser's title bar and tab).
   title ? "NanoKVM",
+  # The web page's icon: an SVG file, or null for none.
+  favicon ? null,
 }:
 stdenv.mkDerivation {
   pname = "nanokvm-kvm";
@@ -16,6 +18,11 @@ stdenv.mkDerivation {
   postPatch = ''
     substituteInPlace www/index.html \
       --replace-fail '<title>NanoKVM</title>' ${lib.escapeShellArg "<title>${lib.escapeXML title}</title>"}
+  ''
+  + lib.optionalString (favicon != null) ''
+    cp ${favicon} www/favicon.svg
+    substituteInPlace www/index.html \
+      --replace-fail '<link rel="stylesheet"' '<link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet"'
   '';
   buildInputs = [
     lz4

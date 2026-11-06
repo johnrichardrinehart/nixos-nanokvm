@@ -11,7 +11,7 @@
 }:
 let
   cfg = config.nanokvm.kvm;
-  kvm = pkgs.callPackage ../pkgs/nanokvm-kvm { inherit (cfg) title; };
+  kvm = pkgs.callPackage ../pkgs/nanokvm-kvm { inherit (cfg) title favicon; };
   h264 = config.nanokvm.h264Encoder.enable;
   args = [
     "--listen"
@@ -85,6 +85,11 @@ in
       default = "NanoKVM";
       example = "kvm.example.local";
       description = "Title of the web UI's page: the browser's title bar and tab.";
+    };
+    favicon = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "SVG file for the web UI's page icon, or null for none.";
     };
     mode = lib.mkOption {
       type = lib.types.enum (

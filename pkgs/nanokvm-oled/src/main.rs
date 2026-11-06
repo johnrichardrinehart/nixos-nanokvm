@@ -34,10 +34,10 @@ const LOGO: Option<Bitmap> = Bitmap::pbm(include_bytes!(env!("NANOKVM_OLED_LOGO"
 const HEADER_ICON: Option<Bitmap> = Bitmap::pbm(include_bytes!(env!("NANOKVM_OLED_HEADER_ICON")));
 const _: () = {
     if let Some(b) = &HEADER_ICON {
-        // Left of the hostname (x = 13), inside the bar (y = 1..10).
+        // On its tile (x = 0..10, y = 0..10), 1 px inside its edges.
         assert!(
-            b.width <= 10 && b.height <= 9,
-            "the header icon is larger than 10x9"
+            b.width <= 9 && b.height <= 9,
+            "the header icon is larger than 9x9"
         );
     }
 };
@@ -378,11 +378,13 @@ fn header(s: &mut Screen, state_dir: &Path) -> (bool, bool) {
     };
     s.icon(W - 11, 1, state, false);
     match &HEADER_ICON {
-        // Lit on a dark tile (x = 1..11), as the logo shows on the screen:
-        // a dark mark on the lit bar is hard to read.
+        // Lit on a dark tile at the screen's edge, as the logo shows on the
+        // screen: a dark mark on the lit bar is hard to read, and a lit
+        // column left of the tile reads as a stray line on the panel. The
+        // lit bar starts at x = 11, 2 px before the hostname.
         Some(b) => {
-            s.fill((1, 0, 11, 11), false);
-            s.bitmap(2, 1, b, true);
+            s.fill((0, 0, 11, 11), false);
+            s.bitmap(1 + (9 - b.width) / 2, 1 + (9 - b.height) / 2, b, true);
         }
         None => s.icon(2, 1, &ICON_FLAKE, false),
     }

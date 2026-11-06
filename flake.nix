@@ -206,6 +206,11 @@
             ];
           };
           kvm-watchdog = pkgs.callPackage ./tests/kvm-watchdog.nix { };
+          # The status screen on the build machine: its tests and clippy.
+          nanokvm-oled = (pkgs.callPackage ./pkgs/nanokvm-oled { }).overrideAttrs (old: {
+            nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.clippy ];
+            postCheck = "cargo clippy --offline --all-targets -- -D warnings";
+          });
         }
       );
 

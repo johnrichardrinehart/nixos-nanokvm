@@ -1,7 +1,8 @@
 # Status screen on the NanoKVM's OLED (SSD1306, 128x64, 1 bpp, /dev/fb0):
 # nanokvm-oled shows a splash with the project's logo and build revision,
 # then hostname, slot and health, IP address, link, SoC temperature, CPU
-# utilisation and uptime, drawn straight into the framebuffer.
+# utilisation and uptime, drawn straight into the framebuffer. Text wider
+# than its place (a long hostname) scrolls.
 {
   config,
   lib,

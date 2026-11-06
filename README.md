@@ -333,7 +333,7 @@ for a key frame every 30 ms):
 
 ## Display
 
-`nanokvm-oled` (`pkgs/nanokvm-oled`, C) draws straight into the OLED's
+`nanokvm-oled` (`pkgs/nanokvm-oled`, Rust) draws straight into the OLED's
 framebuffer (`/dev/fb0`, SSD1306, 128×64): a splash with the project's logo,
 name and the flake's git revision while it starts, then a status screen
 with the hostname, slot and its state (committed, trial, failed), a large
@@ -343,6 +343,17 @@ busybox `ntpd` has set the clock from pool.ntp.org), link speed, health
 check, SoC temperature and CPU load, and a row that
 shows the DHCP address, the IPv6 link-local address and the MAC address
 in turn, 5 s each (whichever exist). Fonts: Spleen 5×8 and 8×16.
+
+Its screen library (`src/lib.rs`) checks at compile time that text fits:
+each text has a place (`Text` for fixed text, `Field` for text of at most
+`max` glyphs), and a place too narrow for its longest text fails the
+build. A field may instead scroll (`Overflow::Marquee`), as the hostname
+and the IPv6 address do when they are too long: the text holds at its head
+for 2 s, moves left at 10 px/s until its tail shows, holds 2 s, and starts
+again at its head. The hostname's position follows the clock, so the 5 s
+redraws do not restart it; a row of the bottom line starts at its head
+each time it is shown. Between redraws only the scrolling frames go to the
+panel, and only when they change.
 
 ## Options
 

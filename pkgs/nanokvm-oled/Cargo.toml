@@ -1,0 +1,26 @@
+[package]
+name = "nanokvm-oled"
+version = "0.1.0"
+edition = "2024"
+description = "Status screen of the NanoKVM's OLED, and a screen library whose text is checked to fit at compile time"
+license = "MIT"
+publish = false
+
+[dependencies]
+nix = { version = "0.31", default-features = false, features = ["net", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+# An unused const Field or Text is not evaluated, so its fit is not checked.
+dead_code = "deny"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+allow_attributes_without_reason = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,29 +1,30 @@
-# Static status-screen program for the NanoKVM OLED. Fonts are Spleen's
-# console fonts (BSD-2-Clause), embedded at build time.
+# The status screen of the NanoKVM's OLED (Rust): the screen library
+# (src/lib.rs), whose text is checked at compile time to fit its place,
+# and the program (src/main.rs). Fonts are Spleen's console fonts
+# (BSD-2-Clause), embedded at build time.
 {
-  stdenv,
-  buildPackages,
+  lib,
+  rustPlatform,
   spleen,
   # Shown on the splash screen (the flake passes its git revision).
   version ? "dev",
 }:
-stdenv.mkDerivation {
+rustPlatform.buildRustPackage {
   pname = "nanokvm-oled";
   inherit version;
-  src = ./.;
-  nativeBuildInputs = [ buildPackages.xxd ];
-  buildPhase = ''
-    runHook preBuild
-    cp ${spleen}/share/consolefonts/spleen-5x8.psfu small.psf
-    cp ${spleen}/share/consolefonts/spleen-8x16.psfu big.psf
-    { xxd -i -n font_small small.psf; xxd -i -n font_big big.psf; } > fonts.h
-    $CC -O2 -Wall -Wextra -Werror -DNANOKVM_VERSION='"${version}"' -o nanokvm-oled oled.c
-    runHook postBuild
-  '';
-  installPhase = ''
-    runHook preInstall
-    install -Dm755 nanokvm-oled $out/bin/nanokvm-oled
-    runHook postInstall
-  '';
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./Cargo.toml
+      ./Cargo.lock
+      ./src
+    ];
+  };
+  cargoLock.lockFile = ./Cargo.lock;
+  env = {
+    NANOKVM_OLED_FONT_SMALL = "${spleen}/share/consolefonts/spleen-5x8.psfu";
+    NANOKVM_OLED_FONT_BIG = "${spleen}/share/consolefonts/spleen-8x16.psfu";
+    NANOKVM_VERSION = version;
+  };
   meta.mainProgram = "nanokvm-oled";
 }

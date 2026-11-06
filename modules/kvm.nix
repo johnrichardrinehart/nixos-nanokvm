@@ -89,7 +89,7 @@ in
     favicon = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
-      description = "SVG file for the web UI's page icon, or null for none.";
+      description = "SVG file for the web UI's page icon, or null for none. The build adds PNG copies for browsers without SVG icons.";
     };
     mode = lib.mkOption {
       type = lib.types.enum (

@@ -1974,6 +1974,8 @@ static const char *content_type(const char *path)
 		return "text/css; charset=utf-8";
 	if (!strcmp(ext, ".svg"))
 		return "image/svg+xml";
+	if (!strcmp(ext, ".png"))
+		return "image/png";
 	return "application/octet-stream";
 }
 

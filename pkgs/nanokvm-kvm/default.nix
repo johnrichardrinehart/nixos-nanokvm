@@ -6,9 +6,11 @@
   stdenv,
   lz4,
   libjpeg,
+  librsvg,
   # The web page's title (the browser's title bar and tab).
   title ? "NanoKVM",
-  # The web page's icon: an SVG file, or null for none.
+  # The web page's icon: an SVG file, or null for none. PNG copies serve
+  # browsers that do not use an SVG icon (Safari: apple-touch-icon).
   favicon ? null,
 }:
 stdenv.mkDerivation {
@@ -21,9 +23,12 @@ stdenv.mkDerivation {
   ''
   + lib.optionalString (favicon != null) ''
     cp ${favicon} www/favicon.svg
+    rsvg-convert -w 32 -h 32 www/favicon.svg -o www/favicon-32.png
+    rsvg-convert -w 180 -h 180 -b white www/favicon.svg -o www/apple-touch-icon.png
     substituteInPlace www/index.html \
-      --replace-fail '<link rel="stylesheet"' '<link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet"'
+      --replace-fail '<link rel="stylesheet"' '<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="apple-touch-icon.png"><link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet"'
   '';
+  nativeBuildInputs = lib.optional (favicon != null) librsvg;
   buildInputs = [
     lz4
     libjpeg

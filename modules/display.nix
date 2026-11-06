@@ -45,7 +45,8 @@ in
       default = null;
       description = ''
         SVG image for the icon at the left of the header bar (9x9), in
-        place of the project's mark. Its dark parts are the dark pixels.
+        place of the project's mark. It is drawn on a dark tile; its dark
+        parts are the lit pixels.
       '';
     };
     brightness = lib.mkOption {

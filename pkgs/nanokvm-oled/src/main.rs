@@ -378,7 +378,12 @@ fn header(s: &mut Screen, state_dir: &Path) -> (bool, bool) {
     };
     s.icon(W - 11, 1, state, false);
     match &HEADER_ICON {
-        Some(b) => s.bitmap(2, 1, b, false),
+        // Lit on a dark tile (x = 1..11), as the logo shows on the screen:
+        // a dark mark on the lit bar is hard to read.
+        Some(b) => {
+            s.fill((1, 0, 11, 11), false);
+            s.bitmap(2, 1, b, true);
+        }
         None => s.icon(2, 1, &ICON_FLAKE, false),
     }
     // Anchored at the clock's zero: the 5 s redraws continue its scroll.

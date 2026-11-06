@@ -11,7 +11,7 @@
 }:
 let
   cfg = config.nanokvm.kvm;
-  kvm = pkgs.callPackage ../pkgs/nanokvm-kvm { };
+  kvm = pkgs.callPackage ../pkgs/nanokvm-kvm { inherit (cfg) title; };
   h264 = config.nanokvm.h264Encoder.enable;
   args = [
     "--listen"
@@ -79,6 +79,12 @@ in
     port = lib.mkOption {
       type = lib.types.port;
       default = 8080;
+    };
+    title = lib.mkOption {
+      type = lib.types.str;
+      default = "NanoKVM";
+      example = "kvm.example.local";
+      description = "Title of the web UI's page: the browser's title bar and tab.";
     };
     mode = lib.mkOption {
       type = lib.types.enum (

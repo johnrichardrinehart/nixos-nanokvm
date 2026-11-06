@@ -66,8 +66,10 @@
           ];
         };
 
-      mkSystem =
-        buildSystem:
+      # A NanoKVM system, cross-built on buildSystem, with the site
+      # configuration in `modules` (as ./configuration.nix).
+      nanokvmSystem =
+        { buildSystem, modules }:
         mixos.lib.mixosSystem {
           modules = [
             {
@@ -83,14 +85,33 @@
             ./modules/display.nix
             { nanokvm.display.version = self.shortRev or self.dirtyShortRev or "dev"; }
             ./modules/kvm.nix
-            ./configuration.nix
-          ];
+          ]
+          ++ modules;
         };
 
-      systems = lib.genAttrs buildSystems mkSystem;
+      # The deployer of a NanoKVM system's slot image, run on pkgs' platform.
+      deploy =
+        pkgs: system:
+        pkgs.callPackage ./pkgs/nanokvm-deploy.nix {
+          inherit (system.config.system.build) slot;
+          inherit (system.config.nanokvm.ab) maxTries;
+        };
+
+      systems = lib.genAttrs buildSystems (
+        buildSystem:
+        nanokvmSystem {
+          inherit buildSystem;
+          modules = [ ./configuration.nix ];
+        }
+      );
       pkgsFor = system: nixpkgs.legacyPackages.${system};
     in
     {
+      # For other flakes' NanoKVM systems and their deployers:
+      #   nanokvmSystem { buildSystem = "x86_64-linux"; modules = [ ./site.nix ]; }
+      #   deploy pkgs system
+      lib = { inherit nanokvmSystem deploy; };
+
       mixosConfigurations = lib.mapAttrs' (system: lib.nameValuePair "nanokvm-${system}") systems;
 
       packages = lib.genAttrs hostSystems (
@@ -103,10 +124,7 @@
           sd-image = build.sdImage;
           slot = build.slot;
           fip = build.fip;
-          deploy = pkgs.callPackage ./pkgs/nanokvm-deploy.nix {
-            inherit (build) slot;
-            inherit (systems.${linuxBuilderFor system}.config.nanokvm.ab) maxTries;
-          };
+          deploy = deploy pkgs systems.${linuxBuilderFor system};
           default = self.packages.${system}.deploy;
           flash-from-stock = pkgs.callPackage ./pkgs/nanokvm-flash-from-stock.nix {
             inherit (build) sdImage;

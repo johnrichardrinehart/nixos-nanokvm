@@ -354,6 +354,7 @@ in turn, 5 s each (whichever exist). Fonts: Spleen 5×8 and 8×16.
 | `h264Encoder.enable` | off | Coda980 driver and Sipeed's firmware |
 | `kvm.enable` | on | web KVM |
 | `kvm.listenAddress`, `kvm.port` | `127.0.0.1`, 8080 | no authentication: anyone reaching it controls the target |
+| `kvm.title` | `NanoKVM` | the web page's title (browser title bar and tab) |
 | `kvm.mode` | `tiles` | `tiles`, `mjpeg`, `mjpeg-half`, `h264` (with the encoder) |
 | `kvm.jpegQuality`, `kvm.maxFps` | 70, 30 | |
 | `kvm.c906l.enable` | on | MJPEG encoding shared with the C906L |

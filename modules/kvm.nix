@@ -38,6 +38,10 @@ let
     "--h264-bridge"
     (lib.getExe' pkgs.sg2002-h264-bridge "sg2002-h264-bridge")
   ]
+  ++ lib.optionals (cfg.viewPort != null) [
+    "--view-port"
+    (toString cfg.viewPort)
+  ]
   ++ lib.optionals cfg.c906l.enable [
     "--c906l"
     "${pkgs.callPackage ../pkgs/nanokvm-kvm/c906l { }}/firmware.bin"
@@ -79,6 +83,17 @@ in
     port = lib.mkOption {
       type = lib.types.port;
       default = 8080;
+    };
+    viewPort = lib.mkOption {
+      type = lib.types.nullOr lib.types.port;
+      default = null;
+      example = 8081;
+      description = ''
+        A second port on listenAddress for viewers, or null for none. Its
+        clients get the same page, video and status, but the server ignores
+        all of their input (keys, pointer, ATX buttons, video mode). A
+        reverse proxy can send the clients that may only watch to this port.
+      '';
     };
     title = lib.mkOption {
       type = lib.types.str;

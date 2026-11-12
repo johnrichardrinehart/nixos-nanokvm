@@ -11,7 +11,8 @@
 //   - the main thread serves the web UI over HTTP, fans video messages out
 //     to WebSocket clients, and turns their input into USB HID reports
 //     (/dev/hidg0 keyboard, /dev/hidg1 absolute mouse) and ATX button
-//     presses (GPIO).
+//     presses (GPIO). The clients of the optional view port (--view-port)
+//     get the same video and status but send no input (access.h).
 //
 // Video is paced by the slowest client: the video thread emits a frame
 // only when every client has drained the previous one, and in the meantime
@@ -56,6 +57,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "access.h"
 #include "usb_watchdog.h"
 #include "watchdog.h"
 
@@ -1903,6 +1905,7 @@ struct client {
 	int ws;            // upgraded
 	int closing;       // close after the queue drains
 	int need_key;      // h264: skip until the next IDR
+	int view_only;     // from the view port: video only, no input (access.h)
 	uint8_t in[65536];
 	size_t in_len;
 	struct msg *out[OUT_MAX];
@@ -2041,7 +2044,8 @@ static void status_json(char *out, size_t len)
 	pthread_mutex_unlock(&st_lock);
 }
 
-// Client commands, one per text message:
+// Client commands, one per text message (a view-only client may send
+// only "key"; the server ignores its other messages):
 //   k USAGE DOWN        key (HID usage id), DOWN 1 or 0
 //   m X Y BUTTONS WHEEL absolute pointer, X/Y 0..32767
 //   r                   release every key
@@ -2053,6 +2057,8 @@ static void ws_command(struct client *c, char *s)
 {
 	int a, b, d, e;
 	char word[16];
+	if (!command_allowed(c->view_only, s))
+		return;
 	if (sscanf(s, "k %d %d", &a, &b) == 2)
 		kbd_key(a, b);
 	else if (sscanf(s, "m %d %d %d %d", &a, &b, &d, &e) == 4)
@@ -2162,6 +2168,10 @@ static int http_input(struct client *c)
 		c->need_key = 1;
 		atomic_fetch_add(&n_viewers, 1);
 		atomic_store(&want_key, 1);
+		// Once per connection: may this client send input? The page
+		// disables its input controls when not.
+		send_text(c, c->view_only ? "{\"t\":\"access\",\"input\":false}"
+					  : "{\"t\":\"access\",\"input\":true}");
 		char st[512];
 		status_json(st, sizeof st);
 		send_text(c, st);
@@ -2346,7 +2356,8 @@ static int bench(int n)
 static void usage(void)
 {
 	fprintf(stderr,
-		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--mode tiles|mjpeg|mjpeg-half|h264]\n"
+		"usage: nanokvm-kvm [--listen ADDR] [--port N] [--view-port N]\n"
+		"                   [--mode tiles|mjpeg|mjpeg-half|h264]\n"
 		"                   [--quality Q] [--max-fps N] [--h264-bridge PATH] [--c906l FIRMWARE]\n"
 		"                   [--atx-config FILE] [--tile 8..128, multiple of 8]\n"
 		"                   [--usb-watchdog on|off] [--usb-hold FILE]\n"
@@ -2354,10 +2365,32 @@ static void usage(void)
 	exit(2);
 }
 
+// Takes one pending connection of a listener. A connection of the view
+// port is view only for its whole life.
+static void accept_client(int lfd, int view_only)
+{
+	int fd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+	if (fd < 0)
+		return;
+	struct client *c = NULL;
+	for (int i = 0; i < MAX_CLIENTS && !c; i++)
+		if (clients[i].fd < 0)
+			c = &clients[i];
+	if (!c) {
+		close(fd);
+		return;
+	}
+	memset(c, 0, sizeof *c);
+	c->fd = fd;
+	c->view_only = view_only;
+	int one = 1;
+	setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
+}
+
 int main(int argc, char **argv)
 {
 	const char *addr = "127.0.0.1";
-	int port = 8080;
+	int port = 8080, view_port = 0;
 	for (int i = 1; i < argc; i++) {
 		const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
 		if (!strcmp(a, "--bench"))
@@ -2376,6 +2409,8 @@ int main(int argc, char **argv)
 			usb_watchdog_on = !strcmp(v, "on");
 		} else if (!strcmp(a, "--port"))
 			port = atoi(v);
+		else if (!strcmp(a, "--view-port"))
+			view_port = atoi(v);
 		else if (!strcmp(a, "--quality"))
 			jpeg_quality = atoi(v);
 		else if (!strcmp(a, "--max-fps"))
@@ -2410,6 +2445,12 @@ int main(int argc, char **argv)
 	int lfd = listen_on(addr, port);
 	if (lfd < 0)
 		return 1;
+	int view_lfd = -1;
+	if (view_port > 0) {
+		view_lfd = listen_on(addr, view_port);
+		if (view_lfd < 0)
+			return 1;
+	}
 	q_event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 	for (int i = 0; i < MAX_CLIENTS; i++)
 		clients[i].fd = -1;
@@ -2417,6 +2458,8 @@ int main(int argc, char **argv)
 	gadget_setup();
 	hid_open();
 	log("listening on %s port %d", addr, port);
+	if (view_lfd >= 0)
+		log("view only on %s port %d", addr, view_port);
 
 	if (c906l_firmware && c906l_start() < 0)
 		log("c906l: offload off; compressing on this core");
@@ -2426,11 +2469,15 @@ int main(int argc, char **argv)
 
 	double next_status = now();
 	for (;;) {
-		struct pollfd p[MAX_CLIENTS + 4];
+		struct pollfd p[MAX_CLIENTS + 5];
 		int np = 0;
 		p[np++] = (struct pollfd){ .fd = lfd, .events = POLLIN };
 		p[np++] = (struct pollfd){ .fd = q_event, .events = POLLIN };
-		int kbd_at = -1, out_at = -1;
+		int kbd_at = -1, out_at = -1, view_at = -1;
+		if (view_lfd >= 0) {
+			view_at = np;
+			p[np++] = (struct pollfd){ .fd = view_lfd, .events = POLLIN };
+		}
 		if (hid_kbd >= 0) {
 			kbd_at = np;
 			p[np++] = (struct pollfd){ .fd = hid_kbd, .events = POLLIN };
@@ -2467,23 +2514,10 @@ int main(int argc, char **argv)
 		if (hid_qn)
 			hid_flush();
 
-		if (p[0].revents & POLLIN) {
-			int fd = accept4(lfd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
-			if (fd >= 0) {
-				struct client *c = NULL;
-				for (int i = 0; i < MAX_CLIENTS && !c; i++)
-					if (clients[i].fd < 0)
-						c = &clients[i];
-				if (!c)
-					close(fd);
-				else {
-					memset(c, 0, sizeof *c);
-					c->fd = fd;
-					int one = 1;
-					setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
-				}
-			}
-		}
+		if (p[0].revents & POLLIN)
+			accept_client(lfd, 0);
+		if (view_at >= 0 && p[view_at].revents & POLLIN)
+			accept_client(view_lfd, 1);
 
 		// Video messages to every viewer.
 		if (p[1].revents & POLLIN) {

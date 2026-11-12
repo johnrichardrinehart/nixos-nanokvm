@@ -205,6 +205,7 @@
               (import ./tests/device.nix { diskoLib = disko.lib; })
             ];
           };
+          kvm-access = pkgs.callPackage ./tests/kvm-access.nix { };
           kvm-watchdog = pkgs.callPackage ./tests/kvm-watchdog.nix { };
           # The status screen on the build machine: its tests and clippy.
           nanokvm-oled = (pkgs.callPackage ./pkgs/nanokvm-oled { }).overrideAttrs (old: {

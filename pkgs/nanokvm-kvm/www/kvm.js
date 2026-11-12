@@ -12,9 +12,12 @@ let status = {};
 // View only: on at every page load and never remembered, so each new
 // viewer starts with it. While on, send() lets only key-frame requests
 // (video) through: no key, pointer, paste, ATX or settings message leaves
-// the page. The server knows nothing of it; other clients still control
-// the target.
+// the page. That is the page's own choice. Separately, the server takes no
+// input at all from a connection to its view port, and says so in an
+// "access" message.
 let viewOnly = true;
+// False when the server ignores this connection's input (kvm.c, access.h).
+let inputAllowed = true;
 
 function send(s) {
   if (viewOnly && s !== "key") return;
@@ -199,6 +202,7 @@ function connect() {
     if (typeof e.data === "string") {
       const s = JSON.parse(e.data);
       if (s.t === "status") onStatus(s);
+      else if (s.t === "access") onAccess(s);
       return;
     }
     const type = new Uint8Array(e.data, 0, 1)[0];
@@ -442,10 +446,21 @@ function setViewOnly(on) {
 }
 $("viewonly").onclick = () => {
   if (!viewOnly) return setViewOnly(true);
+  if (!inputAllowed) return;
   if (!confirm("Send this browser's keys, mouse and buttons to the target?")) return;
   setViewOnly(false);
   canvas.focus();
 };
+
+// The server says once per connection whether it takes this connection's
+// input. When it does not, view only stays on and its toggle is disabled.
+function onAccess(s) {
+  inputAllowed = s.input !== false;
+  if (!inputAllowed) setViewOnly(true);
+  const b = $("viewonly");
+  b.disabled = !inputAllowed;
+  if (!inputAllowed) b.title = "This address gives view only: keys, mouse and buttons do not reach the target.";
+}
 setViewOnly(true);
 
 connect();

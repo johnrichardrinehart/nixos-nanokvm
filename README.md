@@ -267,9 +267,15 @@ ssh -L 8080:localhost:8080 root@nanokvm   # then open http://localhost:8080
   Tab and Space work on the page. To send input, click "View only" and
   confirm: the button then reads "Input live" and the header is red.
   Click it again to go back. View only stops accidental input from
-  viewers; it is not access control. The server accepts input from all
+  viewers; it is not access control. The main port accepts input from all
   clients, for example a script that sends `k` and `atx` messages on
   `/ws`.
+- View port (`kvm.viewPort`, off by default): a second port with the same
+  page, video and status. The server ignores all input from its clients:
+  keys, pointer, ATX presses, ATX wiring and the video mode
+  (`pkgs/nanokvm-kvm/access.h`). The page shows "View only" and disables
+  the toggle. A reverse proxy can send the clients that may only watch to
+  this port.
 - Cabling (NanoKVM Full): the target's USB goes to the USB-C port next to
   HDMI on the side of the case's dark end (PC-USB); the other USB-C beside
   HDMI (AUX) is power only; the KVM-B board goes to the USB-C beside
@@ -365,6 +371,7 @@ panel, and only when they change.
 | `h264Encoder.enable` | off | Coda980 driver and Sipeed's firmware |
 | `kvm.enable` | on | web KVM |
 | `kvm.listenAddress`, `kvm.port` | `127.0.0.1`, 8080 | no authentication: anyone reaching it controls the target |
+| `kvm.viewPort` | none | a second port on `kvm.listenAddress` with no input: video and status only |
 | `kvm.title` | `NanoKVM` | the web page's title (browser title bar and tab) |
 | `kvm.favicon` | none | SVG file for the web page's icon; the build adds PNG copies (32 px icon, 180 px `apple-touch-icon` for Safari) |
 | `kvm.mode` | `tiles` | `tiles`, `mjpeg`, `mjpeg-half`, `h264` (with the encoder) |
